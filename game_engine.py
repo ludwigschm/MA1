@@ -139,6 +139,15 @@ class EventLogger:
         self.conn.commit()
         if self.csv_fp:
             csv.writer(self.csv_fp).writerow(row); self.csv_fp.flush()
+        return {
+            "session_id": session_id,
+            "round_idx": round_idx,
+            "phase": phase.name,
+            "actor": actor,
+            "action": action,
+            "payload": payload,
+            "t_utc_iso": t_utc_iso,
+        }
 
     def close(self):
         if self.csv_fp: self.csv_fp.close()
@@ -151,11 +160,101 @@ def hand_value(a: int, b: int) -> int:
     return 0 if s in (20, 21, 22) else s
 
 @dataclass
+class SessionCsvLogger:
+    HEADER = [
+        "Spiel", "Block", "Bedingung", "Runde", "Spieler", "VP",
+        "Karte1 VP1", "Karte2 VP1", "Karte1 VP2", "Karte2 VP2",
+        "Taste", "Time", "Gewinner",
+    ]
+
+    def __init__(self, path: pathlib.Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        new_file = not path.exists()
+        self._fp = open(path, "a", encoding="utf-8", newline="")
+        self._writer = csv.writer(self._fp)
+        if new_file:
+            self._writer.writerow(self.HEADER)
+            self._fp.flush()
+
+    def _action_label(self, actor: str, action: str, payload: Dict[str, Any]) -> str:
+        if action == "start_click":
+            return "Start"
+        if action == "next_round_click":
+            return "Weiter"
+        if action == "signal":
+            return payload.get("level", "")
+        if action == "call":
+            return payload.get("call", "")
+        if action == "reveal_card":
+            idx = payload.get("card_idx")
+            if idx is not None:
+                return f"Karte {idx + 1}"
+        if action == "phase_change":
+            return f"Phase → {payload.get('to', '')}"
+        if action == "reveal_and_score":
+            return "Reveal/Score"
+        return action
+
+    def log(self, cfg: "GameEngineConfig", rs: RoundState,
+            actor: str, action: str, payload: Dict[str, Any], timestamp_iso: str):
+        if actor == "SYS":
+            return
+        if cfg.session_number is None:
+            session_value = cfg.session_id
+        else:
+            session_value = cfg.session_number
+
+        if actor == "P1":
+            vp_actor = rs.roles.p1_is.value
+        elif actor == "P2":
+            vp_actor = rs.roles.p2_is.value
+        else:
+            vp_actor = ""
+
+        vp1_cards = rs.plan.vp1_cards
+        vp2_cards = rs.plan.vp2_cards
+
+        winner = payload.get("winner") or ""
+        if not winner and rs.winner is not None:
+            winner = rs.winner.value
+
+        row = [
+            session_value,
+            cfg.block,
+            cfg.condition,
+            rs.index + 1,
+            actor if actor != "SYS" else "",
+            vp_actor,
+            vp1_cards[0],
+            vp1_cards[1],
+            vp2_cards[0],
+            vp2_cards[1],
+            self._action_label(actor, action, payload),
+            timestamp_iso,
+            winner,
+        ]
+        self._writer.writerow(row)
+        self._fp.flush()
+
+    def close(self):
+        self._fp.close()
+
+
+@dataclass
 class GameEngineConfig:
     session_id: str
     csv_path: str
     db_path: str = "logs/events.sqlite3"
-    csv_log_path: Optional[str] = "logs/events.csv"
+    csv_log_path: Optional[str] = None
+    session_number: Optional[int] = None
+    block: int = 1
+    condition: str = "no_payout"
+    log_dir: str = "logs"
+
+    def __post_init__(self):
+        if self.session_number is None:
+            digits = "".join(ch for ch in self.session_id if ch.isdigit())
+            self.session_number = int(digits) if digits else None
 
 class GameEngine:
     """
@@ -169,6 +268,15 @@ class GameEngine:
         self.cfg = cfg
         self.schedule = RoundSchedule(cfg.csv_path)
         self.logger = EventLogger(cfg.db_path, cfg.csv_log_path)
+        session_identifier = (
+            cfg.session_number if cfg.session_number is not None else cfg.session_id
+        )
+        condition_slug = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_"
+                                   for ch in cfg.condition.lower())
+        session_csv_path = pathlib.Path(cfg.log_dir) / (
+            f"session_{session_identifier}_block{cfg.block}_{condition_slug}.csv"
+        )
+        self.session_csv = SessionCsvLogger(session_csv_path)
         # Runde 1: VP1 ist Spieler 1, VP2 ist Spieler 2
         roles = RoleMap(p1_is=VP.VP1, p2_is=VP.VP2)
         self.round_idx = 0
@@ -180,7 +288,10 @@ class GameEngine:
             raise RuntimeError(f"Falsche Phase: {self.current.phase.name}")
 
     def _log(self, actor: str, action: str, payload: Dict[str, Any]):
-        self.logger.log(self.cfg.session_id, self.current.index, self.current.phase, actor, action, payload)
+        data = self.logger.log(
+            self.cfg.session_id, self.current.index, self.current.phase, actor, action, payload
+        )
+        self.session_csv.log(self.cfg, self.current, actor, action, payload, data["t_utc_iso"])
 
     def _cards_of(self, player: Player) -> Tuple[int,int]:
         # Hole Karten der VP, die aktuell diese Spielerrolle hat
@@ -250,11 +361,16 @@ class GameEngine:
         if self.current.p2_call is not None:
             raise RuntimeError("Call bereits gesetzt.")
         self.current.p2_call = call
-        self._log("P2", "call", {"call": call.value})
-
         winner, reason = self._compute_winner(call, p1_hat_wahrheit_gesagt)
         self.current.winner = winner
         self.current.outcome_reason = reason
+
+        payload_call: Dict[str, Any] = {"call": call.value}
+        if p1_hat_wahrheit_gesagt is not None:
+            payload_call["p1_truth"] = bool(p1_hat_wahrheit_gesagt)
+        if winner is not None:
+            payload_call["winner"] = winner.value
+        self._log("P2", "call", payload_call)
 
         # Für Reveal/Score: echte Kartenwerte beider VPs
         vp1 = self.current.plan.vp1_cards
@@ -359,6 +475,7 @@ class GameEngine:
 
     def close(self):
         self.logger.close()
+        self.session_csv.close()
 
 
 
