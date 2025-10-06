@@ -660,6 +660,27 @@ class TabletopRoot(FloatLayout):
             return None
         return block, rounds[self.current_round_idx]
 
+    def peek_next_round_info(self):
+        """Ermittelt Metadaten zur nächsten Runde ohne den Status zu verändern."""
+        if not self.blocks:
+            return None
+        if self.current_block_idx >= len(self.blocks):
+            return None
+        block_idx = self.current_block_idx
+        round_idx = self.current_round_idx + 1
+        while block_idx < len(self.blocks):
+            block = self.blocks[block_idx]
+            rounds = block.get('rounds') or []
+            if round_idx < len(rounds):
+                return {
+                    'block': block,
+                    'round_index': round_idx,
+                    'round_in_block': round_idx + 1,
+                }
+            block_idx += 1
+            round_idx = 0
+        return None
+
     def advance_round_pointer(self):
         if not self.blocks or self.session_finished:
             self.round += 1
@@ -1263,7 +1284,15 @@ class TabletopRoot(FloatLayout):
         block_condition = ''
         block_number = ''
         round_in_block = ''
-        if self.current_block_info:
+        next_round_info = None
+        if action == 'next_round_click':
+            next_round_info = self.peek_next_round_info()
+        if next_round_info:
+            block = next_round_info['block']
+            block_condition = 'pay' if block.get('payout') else 'no_pay'
+            block_number = block.get('index', '')
+            round_in_block = next_round_info['round_in_block']
+        elif self.current_block_info:
             block_condition = 'pay' if self.current_round_has_stake else 'no_pay'
             block_number = self.current_block_info['index']
             round_in_block = self.round_in_block
