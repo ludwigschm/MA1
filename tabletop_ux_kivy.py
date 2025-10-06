@@ -142,9 +142,9 @@ class IconButton(Button):
         self.update_visual()
 
     def set_pressed_state(self):
-        # nach Auswahl bleibt die live-Grafik sichtbar
+        # nach Auswahl bleibt die live-Grafik sichtbar, ohne dass der Button live bleibt
         self.selected = True
-        self.live = True
+        self.live = False
         self.disabled = True
         self.update_visual()
 
@@ -168,6 +168,28 @@ class IconButton(Button):
         self.background_normal = img
         self.background_down = img
         self.opacity = 1.0 if (self.live or self.selected) else 0.6
+
+
+class RotatedLabel(Label):
+    """Label mit Rotationsunterstützung (für gespiegelte Anzeige)."""
+    def __init__(self, angle: float = 0, **kwargs):
+        self.rotation_angle = angle
+        super().__init__(**kwargs)
+        with self.canvas.before:
+            self._push_matrix = PushMatrix()
+            self._rotation = Rotate(angle=self.rotation_angle, origin=self.center)
+        with self.canvas.after:
+            self._pop_matrix = PopMatrix()
+        self.bind(pos=self._update_transform, size=self._update_transform)
+
+    def set_rotation(self, angle: float):
+        self.rotation_angle = angle
+        self._update_transform()
+
+    def _update_transform(self, *args):
+        if hasattr(self, '_rotation'):
+            self._rotation.origin = self.center
+            self._rotation.angle = self.rotation_angle
 
 class TabletopRoot(FloatLayout):
     def __init__(self, **kw):
@@ -207,6 +229,25 @@ class TabletopRoot(FloatLayout):
         )
         self.btn_start_p2.bind(on_release=lambda *_: self.start_pressed(2))
         self.add_widget(self.btn_start_p2)
+
+        # Ergebnis-Labels oben/unten (oben gespiegelt)
+        self.info_labels = {
+            'bottom': RotatedLabel(
+                color=(1, 1, 1, 1),
+                size_hint=(None, None),
+                halign='center',
+                valign='middle'
+            ),
+            'top': RotatedLabel(
+                angle=180,
+                color=(1, 1, 1, 1),
+                size_hint=(None, None),
+                halign='center',
+                valign='middle'
+            )
+        }
+        for lbl in self.info_labels.values():
+            self.add_widget(lbl)
 
         # Spielerzonen (je 2 Karten in den Ecken)
         self.p1_outer = CardWidget(size_hint=(None, None))
@@ -264,16 +305,6 @@ class TabletopRoot(FloatLayout):
             for img in imgs:
                 self.add_widget(img)
 
-        # Showdown-Label (Mitte)
-        self.showdown_label = Label(
-            text='',
-            color=(1, 1, 1, 1),
-            size_hint=(None, None),
-            halign='center',
-            valign='middle'
-        )
-        self.add_widget(self.showdown_label)
-
         # Rundenbadge unten Mitte
         self.round_badge = Label(
             text='',
@@ -284,20 +315,20 @@ class TabletopRoot(FloatLayout):
         )
         self.add_widget(self.round_badge)
 
-        # Statusanzeigen
-        self.status_labels = {
-            1: Label(text='', color=(1, 1, 1, 1), size_hint=(None, None), halign='left', valign='top'),
-            2: Label(text='', color=(1, 1, 1, 1), size_hint=(None, None), halign='left', valign='top'),
-        }
-        for label in self.status_labels.values():
-            self.add_widget(label)
-
         # interne States
         self.p1_pressed = False
         self.p2_pressed = False
         self.player_signals = {1: None, 2: None}
         self.player_decisions = {1: None, 2: None}
         self.status_lines = {1: [], 2: []}
+        self.status_labels = {1: None, 2: None}
+        self.last_outcome = {
+            'winner': None,
+            'truthful': None,
+            'actual_level': None,
+            'signal_choice': None,
+            'judge_choice': None
+        }
         self.card_cycle = itertools.cycle(['7.png', '8.png', '9.png', '10.png', '11.png'])
 
         self.update_layout()
@@ -317,11 +348,12 @@ class TabletopRoot(FloatLayout):
 
         # Start buttons
         self.btn_start_p1.size = start_size
-        self.btn_start_p1.pos = (corner_margin, H / 2 - start_size[1] / 2)
+        start_margin = 60 * scale
+        self.btn_start_p1.pos = (start_margin, start_margin)
         self.btn_start_p1.set_rotation(0)
 
         self.btn_start_p2.size = start_size
-        self.btn_start_p2.pos = (W - corner_margin - start_size[0], H / 2 - start_size[1] / 2)
+        self.btn_start_p2.pos = (W - start_margin - start_size[0], H - start_margin - start_size[1])
         self.btn_start_p2.set_rotation(180)
 
         # Cards positions
@@ -343,9 +375,10 @@ class TabletopRoot(FloatLayout):
         btn_width, btn_height = 260 * scale, 260 * scale
         vertical_gap = 40 * scale
         horizontal_gap = 60 * scale
+        cluster_shift = 360 * scale
 
         # Player 1 (bottom right)
-        signal_x = W - corner_margin - btn_width
+        signal_x = W - corner_margin - btn_width - cluster_shift
         base_y = corner_margin
         for idx, level in enumerate(['low', 'mid', 'high']):
             btn = self.signal_buttons[1][level]
@@ -361,7 +394,7 @@ class TabletopRoot(FloatLayout):
             btn.set_rotation(0)
 
         # Player 2 (top left)
-        signal2_x = corner_margin
+        signal2_x = corner_margin + cluster_shift
         top_y = H - corner_margin
         for idx, level in enumerate(['low', 'mid', 'high']):
             btn = self.signal_buttons[2][level]
@@ -387,20 +420,31 @@ class TabletopRoot(FloatLayout):
 
         for idx, img in enumerate(self.center_cards[1]):
             img.size = (center_card_width, center_card_height)
-        self.center_cards[1][0].pos = (left_x, bottom_y)
-        self.center_cards[1][1].pos = (right_x, bottom_y)
+        self.center_cards[1][0].pos = (right_x, bottom_y)
+        self.center_cards[1][1].pos = (left_x, bottom_y)
 
         for idx, img in enumerate(self.center_cards[2]):
             img.size = (center_card_width, center_card_height)
         self.center_cards[2][0].pos = (left_x, top_y_center)
         self.center_cards[2][1].pos = (right_x, top_y_center)
 
-        # Showdown label
-        label_width, label_height = 1600 * scale, 220 * scale
-        self.showdown_label.size = (label_width, label_height)
-        self.showdown_label.font_size = 64 * scale if scale else 64
-        self.showdown_label.pos = (W / 2 - label_width / 2, H / 2 - label_height / 2)
-        self.showdown_label.text_size = (label_width, label_height)
+        # Info labels
+        info_width, info_height = 2000 * scale, 160 * scale
+        info_margin = 60 * scale
+
+        bottom_label = self.info_labels['bottom']
+        bottom_label.size = (info_width, info_height)
+        bottom_label.font_size = 56 * scale if scale else 56
+        bottom_label.pos = (W / 2 - info_width / 2, bottom_y - info_height - info_margin)
+        bottom_label.text_size = (info_width, info_height)
+        bottom_label.set_rotation(0)
+
+        top_label = self.info_labels['top']
+        top_label.size = (info_width, info_height)
+        top_label.font_size = 56 * scale if scale else 56
+        top_label.pos = (W / 2 - info_width / 2, top_y_center + center_card_height + info_margin)
+        top_label.text_size = (info_width, info_height)
+        top_label.set_rotation(180)
 
         # Round badge
         badge_width, badge_height = 1400 * scale, 70 * scale
@@ -408,22 +452,6 @@ class TabletopRoot(FloatLayout):
         self.round_badge.font_size = 40 * scale if scale else 40
         self.round_badge.pos = (W / 2 - badge_width / 2, corner_margin / 2)
         self.round_badge.text_size = (badge_width, badge_height)
-
-        # Status labels
-        status_width, status_height = 900 * scale, 240 * scale
-        status_font = 40 * scale if scale else 40
-
-        label1 = self.status_labels[1]
-        label1.size = (status_width, status_height)
-        label1.font_size = status_font
-        label1.pos = (corner_margin, self.p1_outer.top + vertical_gap)
-        label1.text_size = (status_width, status_height)
-
-        label2 = self.status_labels[2]
-        label2.size = (status_width, status_height)
-        label2.font_size = status_font
-        label2.pos = (W - corner_margin - status_width, self.p2_inner.y - status_height - vertical_gap)
-        label2.text_size = (status_width, status_height)
 
         # Refresh transforms after layout changes
         for buttons in self.signal_buttons.values():
@@ -434,6 +462,8 @@ class TabletopRoot(FloatLayout):
                 btn._update_transform()
         self.btn_start_p1._update_transform()
         self.btn_start_p2._update_transform()
+        for lbl in self.info_labels.values():
+            lbl._update_transform()
 
     # --- Logik
     def apply_phase(self):
@@ -449,7 +479,6 @@ class TabletopRoot(FloatLayout):
 
         # Showdown zurücksetzen
         if self.phase != PH_SHOWDOWN:
-            self.showdown_label.text = ''
             self.refresh_center_cards(reveal=False)
 
         # Startbuttons
@@ -482,6 +511,7 @@ class TabletopRoot(FloatLayout):
         # Badge unten
         role_txt = f"P1: {'Signal' if self.signaler==1 else 'Judge'} · P2: {'Signal' if self.signaler==2 else 'Judge'}"
         self.round_badge.text = f"Runde {self.round} · {role_txt}"
+        self.update_info_labels()
 
     def start_pressed(self, who:int):
         if self.phase not in (PH_WAIT_BOTH_START, PH_SHOWDOWN):
@@ -532,6 +562,7 @@ class TabletopRoot(FloatLayout):
                 btn.set_live(False)
                 btn.disabled = True
         self.record_action(player, f'Signal gewählt: {self.describe_level(level)}')
+        self.update_info_labels()
         Clock.schedule_once(lambda *_: self.goto(PH_JUDGE), 0.2)
 
     def pick_decision(self, player:int, decision:str):
@@ -545,6 +576,7 @@ class TabletopRoot(FloatLayout):
                 btn.set_live(False)
                 btn.disabled = True
         self.record_action(player, f'Entscheidung: {decision.upper()}')
+        self.update_info_labels()
         Clock.schedule_once(lambda *_: self.goto(PH_SHOWDOWN), 0.2)
 
     def goto(self, phase):
@@ -586,8 +618,15 @@ class TabletopRoot(FloatLayout):
         self.update_status_label(1)
         self.update_status_label(2)
         # Showdown Elements
-        self.showdown_label.text = ''
+        self.last_outcome = {
+            'winner': None,
+            'truthful': None,
+            'actual_level': None,
+            'signal_choice': None,
+            'judge_choice': None
+        }
         self.refresh_center_cards(reveal=False)
+        self.update_info_labels()
 
     def refresh_center_cards(self, reveal: bool):
         if reveal:
@@ -607,12 +646,102 @@ class TabletopRoot(FloatLayout):
     def update_showdown(self):
         # Karten in der Mitte anzeigen
         self.refresh_center_cards(reveal=True)
+        self.compute_outcome()
+        self.update_info_labels()
+
+    def card_value_from_path(self, path: str):
+        if not path:
+            return None
+        name = os.path.basename(path)
+        digits = ''.join(ch for ch in name if ch.isdigit())
+        if not digits:
+            return None
+        try:
+            return int(digits)
+        except ValueError:
+            return None
+
+    def determine_signal_level(self, player: int):
+        if player == 1:
+            inner_widget, outer_widget = self.p1_inner, self.p1_outer
+        else:
+            inner_widget, outer_widget = self.p2_inner, self.p2_outer
+        inner_val = self.card_value_from_path(inner_widget.front_image)
+        outer_val = self.card_value_from_path(outer_widget.front_image)
+        if inner_val is None or outer_val is None:
+            return None
+        total = inner_val + outer_val
+        if total == 19:
+            return 'high'
+        if total in (16, 17, 18):
+            return 'mid'
+        if total in (14, 15):
+            return 'low'
+        return None
+
+    def compute_outcome(self):
         signaler = self.signaler
         judge = self.judge
-        signal_choice = self.player_signals[signaler]
-        judge_choice = self.player_decisions[judge]
-        summary = [f"Du bist Spieler {signaler} – Signaler", f"Deine Wahl: {self.describe_level(signal_choice) if signal_choice else '-'}", f"Anderer Spieler: {judge_choice.upper() if judge_choice else '-'}"]
-        self.showdown_label.text = "\n".join(summary)
+        signal_choice = self.player_signals.get(signaler)
+        judge_choice = self.player_decisions.get(judge)
+        actual_level = self.determine_signal_level(signaler)
+
+        truthful = None
+        if signal_choice and actual_level:
+            truthful = (signal_choice == actual_level)
+
+        winner = None
+        if judge_choice and truthful is not None:
+            if judge_choice == 'wahr':
+                winner = judge if truthful else signaler
+            elif judge_choice == 'bluff':
+                winner = judge if not truthful else signaler
+
+        self.last_outcome = {
+            'winner': winner,
+            'truthful': truthful,
+            'actual_level': actual_level,
+            'signal_choice': signal_choice,
+            'judge_choice': judge_choice
+        }
+        return self.last_outcome
+
+    def describe_player_choice(self, player: int) -> str:
+        signal = self.player_signals.get(player)
+        decision = self.player_decisions.get(player)
+        if signal:
+            return self.describe_level(signal)
+        if decision:
+            mapping = {'wahr': 'WAHR', 'bluff': 'BLUFF'}
+            return mapping.get(decision, decision.upper())
+        return '-'
+
+    def result_text(self, player: int) -> str:
+        winner = self.last_outcome.get('winner') if self.last_outcome else None
+        if winner is None:
+            return '-'
+        if winner == player:
+            return 'Gewonnen'
+        return 'Verloren'
+
+    def update_info_labels(self):
+        self.compute_outcome()
+        choice_p1 = self.describe_player_choice(1)
+        choice_p2 = self.describe_player_choice(2)
+        bottom_lines = [
+            'Du bist Spieler 1',
+            f'Wahl Spieler 1: {choice_p1}',
+            f'Wahl Spieler 2: {choice_p2}',
+            f'Ergebnis: {self.result_text(1)}'
+        ]
+        top_lines = [
+            'Du bist Spieler 2',
+            f'Wahl Spieler 1: {choice_p1}',
+            f'Wahl Spieler 2: {choice_p2}',
+            f'Ergebnis: {self.result_text(2)}'
+        ]
+        self.info_labels['bottom'].text = "\n".join(bottom_lines)
+        self.info_labels['top'].text = "\n".join(top_lines)
 
     def describe_level(self, level:str) -> str:
         mapping = {
@@ -628,6 +757,9 @@ class TabletopRoot(FloatLayout):
         self.update_status_label(player)
 
     def update_status_label(self, player:int):
+        label = self.status_labels.get(player)
+        if not label:
+            return
         role = 'Signal' if self.signaler == player else 'Judge'
         header = [f"Du bist Spieler {player}", f"Rolle: {role}"]
         body = self.status_lines[player]
