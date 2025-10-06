@@ -16,7 +16,6 @@ from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.floatlayout import FloatLayout
-from kivy.uix.gridlayout import GridLayout
 from kivy.uix.image import Image
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
@@ -301,23 +300,25 @@ class TwoPlayerUI(BoxLayout):
         self.bottom_info_box.add_widget(self.bottom_detail_label)
         self.board.add_widget(self.bottom_info_box)
 
-        # Kartenraster
-        card_width, card_height = 220, 320
-        self.card_grid = GridLayout(cols=2, rows=2, spacing=30, size_hint=(None, None))
-        self.card_grid.size = (card_width * 2 + 30, card_height * 2 + 30)
-        self.card_grid.pos_hint = {"center_x": 0.5, "center_y": 0.5}
-        self.board.add_widget(self.card_grid)
+        # Kartenbereich in der Mitte, der sich an die Fenstergröße anpasst
+        self.card_area = FloatLayout(size_hint=(0.48, 0.68), pos_hint={"center_x": 0.5, "center_y": 0.5})
+        self.board.add_widget(self.card_area)
 
         self.card_widgets: Dict[Tuple[VP, int], CardWidget] = {}
+        self._card_aspect = 320 / 220  # Verhältnis Höhe zu Breite
         for vp, idx, angle in [
             (VP.VP2, 0, 180),
             (VP.VP2, 1, 180),
             (VP.VP1, 0, 0),
             (VP.VP1, 1, 0),
         ]:
-            widget = CardWidget(self, vp, idx, angle=angle, size=(card_width, card_height))
+            widget = CardWidget(self, vp, idx, angle=angle)
+            widget.size_hint = (None, None)
             self.card_widgets[(vp, idx)] = widget
-            self.card_grid.add_widget(widget)
+            self.card_area.add_widget(widget)
+
+        self.card_area.bind(size=self._update_card_layout, pos=self._update_card_layout)
+        Clock.schedule_once(lambda dt: self._update_card_layout(), 0)
 
         # Steuerpanels
         self.vp1_panel = PlayerPanel(ux_dir, angle=0)
@@ -577,6 +578,40 @@ class TwoPlayerUI(BoxLayout):
         self._start_block()
 
     # ===== Helper =====
+    def _update_card_layout(self, *_):
+        if not hasattr(self, "card_area"):
+            return
+
+        area_w, area_h = self.card_area.size
+        if area_w <= 0 or area_h <= 0:
+            return
+
+        spacing = min(area_w, area_h) * 0.08
+        available_w = area_w - spacing
+        available_h = area_h - spacing
+        if available_w <= 0 or available_h <= 0:
+            return
+
+        card_width = min(available_w / 2.0, (available_h / 2.0) / self._card_aspect)
+        card_height = card_width * self._card_aspect
+
+        cx = self.card_area.width / 2.0
+        cy = self.card_area.height / 2.0
+        dx = card_width / 2.0 + spacing / 2.0
+        dy = card_height / 2.0 + spacing / 2.0
+
+        positions = {
+            (VP.VP2, 0): (-dx, dy),
+            (VP.VP2, 1): (dx, dy),
+            (VP.VP1, 0): (-dx, -dy),
+            (VP.VP1, 1): (dx, -dy),
+        }
+
+        for key, widget in self.card_widgets.items():
+            offset_x, offset_y = positions.get(key, (0, 0))
+            widget.size = (card_width, card_height)
+            widget.center = (cx + offset_x, cy + offset_y)
+
     def _img_for_value(self, val: Optional[int]) -> str:
         if val is None:
             return self.img_back
