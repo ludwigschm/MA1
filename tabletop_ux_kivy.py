@@ -179,27 +179,6 @@ class IconButton(Button):
         self.opacity = 1.0 if (self.live or self.selected) else 0.6
 
 
-class RotatedLabel(Label):
-    """Label mit Rotationsunterstützung (für gespiegelte Anzeige)."""
-    def __init__(self, angle: float = 0, **kwargs):
-        self.rotation_angle = angle
-        super().__init__(**kwargs)
-        with self.canvas.before:
-            self._push_matrix = PushMatrix()
-            self._rotation = Rotate(angle=self.rotation_angle, origin=self.center)
-        with self.canvas.after:
-            self._pop_matrix = PopMatrix()
-        self.bind(pos=self._update_transform, size=self._update_transform)
-
-    def set_rotation(self, angle: float):
-        self.rotation_angle = angle
-        self._update_transform()
-
-    def _update_transform(self, *args):
-        if hasattr(self, '_rotation'):
-            self._rotation.origin = self.center
-            self._rotation.angle = self.rotation_angle
-
 class TabletopRoot(FloatLayout):
     def __init__(self, **kw):
         super().__init__(**kw)
@@ -255,43 +234,6 @@ class TabletopRoot(FloatLayout):
         )
         self.btn_start_p2.bind(on_release=lambda *_: self.start_pressed(2))
         self.add_widget(self.btn_start_p2)
-
-        # Ergebnis-Labels oben/unten (oben gespiegelt)
-        self.info_labels = {
-            'bottom': RotatedLabel(
-                color=(1, 1, 1, 1),
-                size_hint=(None, None),
-                halign='center',
-                valign='middle'
-            ),
-            'top': RotatedLabel(
-                angle=180,
-                color=(1, 1, 1, 1),
-                size_hint=(None, None),
-                halign='center',
-                valign='middle'
-            )
-        }
-        for lbl in self.info_labels.values():
-            self.add_widget(lbl)
-
-        self.outcome_labels = {
-            1: RotatedLabel(
-                color=(1, 1, 1, 1),
-                size_hint=(None, None),
-                halign='center',
-                valign='middle'
-            ),
-            2: RotatedLabel(
-                angle=180,
-                color=(1, 1, 1, 1),
-                size_hint=(None, None),
-                halign='center',
-                valign='middle'
-            )
-        }
-        for lbl in self.outcome_labels.values():
-            self.add_widget(lbl)
 
         # Spielerzonen (je 2 Karten in den Ecken)
         self.p1_outer = CardWidget(size_hint=(None, None))
@@ -392,7 +334,6 @@ class TabletopRoot(FloatLayout):
         self.outcome_score_applied = False
 
         self.update_layout()
-        self._update_outcome_labels()
 
     def update_layout(self):
         W, H = Window.size
@@ -490,42 +431,6 @@ class TabletopRoot(FloatLayout):
         self.center_cards[2][0].pos = (left_x, top_y_center)
         self.center_cards[2][1].pos = (right_x, top_y_center)
 
-        # Info labels
-        info_width, info_height = 2000 * scale, 160 * scale
-        info_margin = 60 * scale
-
-        bottom_label = self.info_labels['bottom']
-        bottom_label.size = (info_width, info_height)
-        bottom_label.font_size = 56 * scale if scale else 56
-        bottom_label.pos = (W / 2 - info_width / 2, bottom_y - info_height - info_margin)
-        bottom_label.text_size = (info_width, info_height)
-        bottom_label.set_rotation(0)
-
-        top_label = self.info_labels['top']
-        top_label.size = (info_width, info_height)
-        top_label.font_size = 56 * scale if scale else 56
-        top_label.pos = (W / 2 - info_width / 2, top_y_center + center_card_height + info_margin)
-        top_label.text_size = (info_width, info_height)
-        top_label.set_rotation(180)
-
-        # Outcome labels per player (above clusters)
-        outcome_width = btn_width * 2 + horizontal_gap
-        outcome_height = 120 * scale
-
-        bottom_outcome = self.outcome_labels[1]
-        bottom_outcome.size = (outcome_width, outcome_height)
-        bottom_outcome.font_size = 64 * scale if scale else 64
-        bottom_outcome.pos = (decision_x, base_y + 2 * (btn_height + vertical_gap))
-        bottom_outcome.text_size = (outcome_width, outcome_height)
-        bottom_outcome.set_rotation(0)
-
-        top_outcome = self.outcome_labels[2]
-        top_outcome.size = (outcome_width, outcome_height)
-        top_outcome.font_size = 64 * scale if scale else 64
-        top_outcome.pos = (decision2_x, top_y - 2 * (btn_height + vertical_gap) - outcome_height)
-        top_outcome.text_size = (outcome_width, outcome_height)
-        top_outcome.set_rotation(180)
-
         # Round badge
         badge_width, badge_height = 1400 * scale, 70 * scale
         self.round_badge.size = (badge_width, badge_height)
@@ -542,10 +447,6 @@ class TabletopRoot(FloatLayout):
                 btn._update_transform()
         self.btn_start_p1._update_transform()
         self.btn_start_p2._update_transform()
-        for lbl in self.info_labels.values():
-            lbl._update_transform()
-        for lbl in self.outcome_labels.values():
-            lbl._update_transform()
 
     # --- Datenquellen & Hilfsfunktionen ---
     def load_blocks(self):
@@ -870,7 +771,6 @@ class TabletopRoot(FloatLayout):
 
         # Badge unten ist deaktiviert
         self.round_badge.text = ''
-        self.update_info_labels()
 
     def start_pressed(self, who:int):
         if self.session_finished:
@@ -956,7 +856,6 @@ class TabletopRoot(FloatLayout):
                 btn.disabled = True
         self.record_action(player, f'Signal gewählt: {self.describe_level(level)}')
         self.log_event(player, 'signal_choice', {'level': level})
-        self.update_info_labels()
         Clock.schedule_once(lambda *_: self.goto(PH_JUDGE), 0.2)
 
     def pick_decision(self, player:int, decision:str):
@@ -971,7 +870,6 @@ class TabletopRoot(FloatLayout):
                 btn.disabled = True
         self.record_action(player, f'Entscheidung: {decision.upper()}')
         self.log_event(player, 'call_choice', {'decision': decision})
-        self.update_info_labels()
         Clock.schedule_once(lambda *_: self.goto(PH_SHOWDOWN), 0.2)
 
     def goto(self, phase):
@@ -1057,7 +955,6 @@ class TabletopRoot(FloatLayout):
             'payout': self.current_round_has_stake,
         }
         self.refresh_center_cards(reveal=False)
-        self.update_info_labels()
         if plan_info:
             self.log_round_start()
 
@@ -1093,7 +990,6 @@ class TabletopRoot(FloatLayout):
                     self.score_state[winner_role] += 1
                     self.score_state[loser_role] -= 1
                     self.outcome_score_applied = True
-        self.update_info_labels()
         if self.session_configured:
             self.log_event(None, 'showdown', outcome or {})
 
@@ -1143,102 +1039,11 @@ class TabletopRoot(FloatLayout):
         }
         return self.last_outcome
 
-    def update_info_labels(self):
-        for lbl in self.info_labels.values():
-            lbl.text = ''
-
-        if not self.session_configured:
-            msg = 'Bitte Sessionnummer eingeben, um zu starten.'
-            self.info_labels['bottom'].text = msg
-            self.info_labels['top'].text = msg
-            for lbl in self.outcome_labels.values():
-                lbl.text = ''
-            return
-
-        if self.session_finished:
-            message = self.pause_message or 'Experiment beendet. Vielen Dank!'
-            self.info_labels['bottom'].text = message
-            self.info_labels['top'].text = message
-            self._update_outcome_labels()
-            return
-
-        if self.in_block_pause:
-            message = self.pause_message or 'Pause. Drückt Play, um fortzufahren.'
-            self.info_labels['bottom'].text = message
-            self.info_labels['top'].text = message
-            self._update_outcome_labels()
-            return
-
-        self.compute_outcome()
-        total_rounds = self.total_rounds_planned or 0
-
-        for vp in (1, 2):
-            physical = self.physical_by_role.get(vp)
-            if physical not in (1, 2):
-                continue
-
-            label_key = 'bottom' if physical == 1 else 'top'
-            label = self.info_labels[label_key]
-
-            lines = []
-            header_line = self.format_round_header(vp, physical, total_rounds)
-            if header_line:
-                lines.append(header_line)
-
-            score_line = self.format_score_line(vp)
-            if score_line:
-                lines.append(score_line)
-
-            own_label, other_label = self.choice_labels_for_vp(vp)
-            own_choice, other_choice = self.choice_texts_for_vp(vp)
-            if own_choice and own_label:
-                lines.append(f'{own_label}: {own_choice}')
-            if other_choice and other_label:
-                lines.append(f'{other_label}: {other_choice}')
-
-            summary_text = self.outcome_summary_text()
-            if summary_text:
-                lines.append(summary_text)
-
-            player_result = self.result_line_for_vp(vp)
-            if player_result:
-                lines.append(player_result)
-
-            label.text = "\n".join(lines)
-
-        self._update_outcome_labels()
-
     def player_descriptor(self, player: int) -> str:
         role = self.role_by_physical.get(player)
         if role in (1, 2):
             return f'Versuchsperson {role} – Spieler {player}'
         return f'Spieler {player}'
-
-    def _update_outcome_labels(self):
-        for label in self.outcome_labels.values():
-            label.text = ''
-
-    def format_round_header(self, vp: int, physical: int, total_rounds: int) -> str:
-        if total_rounds:
-            round_part = f'Runde {self.round}/{total_rounds}'
-        else:
-            round_part = f'Runde {self.round}'
-        return f'{round_part} | Versuchsperson {vp}: Spieler {physical}'
-
-    def format_score_line(self, vp: int) -> str:
-        if not (self.current_round_has_stake and self.score_state_round_start):
-            return ''
-        start_score = self.score_state_round_start.get(vp)
-        if start_score is None:
-            return ''
-        if self.outcome_score_applied and self.score_state:
-            end_score = self.score_state.get(vp, start_score)
-            delta = end_score - start_score
-            if delta > 0:
-                return f'Punkte: {start_score} +{delta}'
-            if delta < 0:
-                return f'Punkte: {start_score} - {abs(delta)}'
-        return f'Punkte: {start_score}'
 
     def format_signal_choice(self, level: str):
         mapping = {
@@ -1254,70 +1059,6 @@ class TabletopRoot(FloatLayout):
             'bluff': 'Bluff',
         }
         return mapping.get(decision)
-
-    def choice_texts_for_vp(self, vp: int):
-        physical = self.physical_by_role.get(vp)
-        if physical not in (1, 2):
-            return (None, None)
-        other_vp = 2 if vp == 1 else 1
-        other_physical = self.physical_by_role.get(other_vp)
-        own_choice = None
-        other_choice = None
-        if physical == self.signaler:
-            own_choice = self.format_signal_choice(self.player_signals.get(physical))
-            if other_physical:
-                other_choice = self.format_decision_choice(
-                    self.player_decisions.get(other_physical)
-                )
-        else:
-            own_choice = self.format_decision_choice(self.player_decisions.get(physical))
-            if other_physical:
-                other_choice = self.format_signal_choice(
-                    self.player_signals.get(other_physical)
-                )
-        return own_choice, other_choice
-
-    def outcome_summary_text(self) -> str:
-        if not self.last_outcome:
-            return ''
-        truthful = self.last_outcome.get('truthful')
-        judge_choice = self.last_outcome.get('judge_choice')
-        if truthful is None or not judge_choice:
-            return ''
-
-        summary_map = {
-            (True, 'wahr'): 'Korrektes Signal - korrektes Urteil',
-            (True, 'bluff'): 'Korrektes Signal - falsches Urteil',
-            (False, 'bluff'): 'Falsches Signal - korrektes Urteil',
-            (False, 'wahr'): 'Falsches Signal - falsches Urteil',
-        }
-        return summary_map.get((truthful, judge_choice), '')
-
-    def result_line_for_vp(self, vp: int) -> str:
-        if not self.last_outcome:
-            return ''
-        winner_physical = self.last_outcome.get('winner')
-        if winner_physical not in (1, 2):
-            return ''
-        winner_vp = self.role_by_physical.get(winner_physical)
-        if winner_vp not in (1, 2):
-            return ''
-        payout = self.last_outcome.get('payout')
-        base = 'Gewonnen' if winner_vp == vp else 'Verloren'
-        if not payout:
-            return base
-        if not (self.score_state_round_start and self.score_state):
-            return base
-        start_score = self.score_state_round_start.get(vp)
-        end_score = self.score_state.get(vp)
-        if start_score is None or end_score is None:
-            return base
-        delta = end_score - start_score
-        if delta > 0:
-            return f'{base} +{delta}'
-        if delta < 0:
-            return f'{base} - {abs(delta)}'
-        return base
 
     def describe_level(self, level:str) -> str:
         return self.format_signal_choice(level) or (level or '-')
@@ -1613,7 +1354,6 @@ class TabletopRoot(FloatLayout):
         self.log_event(None, 'session_start', {'session_number': number})
         self.log_round_start()
         self.apply_phase()
-        self.update_info_labels()
 
     def log_round_start(self):
         if not self.session_configured:
