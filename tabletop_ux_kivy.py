@@ -1049,29 +1049,34 @@ class TabletopRoot(FloatLayout):
 
         self.compute_outcome()
         total_rounds = self.total_rounds_planned or 0
-        shared_lines = self._round_and_role_lines(total_rounds)
-        decision_lines = self._decision_display_lines()
-        result_lines = self._result_display_lines()
 
         for vp in (1, 2):
             physical = self.physical_by_role.get(vp)
             if physical not in (1, 2):
                 continue
+
             label_key = 'bottom' if physical == 1 else 'top'
             label = self.info_labels[label_key]
-            lines = list(shared_lines)
+
+            lines = []
+            header_line = self.format_round_header(vp, physical, total_rounds)
+            if header_line:
+                lines.append(header_line)
 
             score_line = self.format_score_line(vp)
             if score_line:
                 lines.append(score_line)
 
-            if decision_lines:
-                lines.append('Entscheidungen:')
-                lines.extend(decision_lines)
+            own_label, other_label = self.choice_labels_for_vp(vp)
+            own_choice, other_choice = self.choice_texts_for_vp(vp)
+            if own_choice and own_label:
+                lines.append(f'{own_label}: {own_choice}')
+            if other_choice and other_label:
+                lines.append(f'{other_label}: {other_choice}')
 
-            if result_lines:
-                lines.append('Ergebnisse:')
-                lines.extend(result_lines)
+            summary_text = self.outcome_summary_text()
+            if summary_text:
+                lines.append(summary_text)
 
             player_result = self.result_line_for_vp(vp)
             if player_result:
@@ -1081,66 +1086,11 @@ class TabletopRoot(FloatLayout):
 
         self._update_outcome_labels()
 
-    def _round_and_role_lines(self, total_rounds: int):
-        lines = []
-        if total_rounds:
-            lines.append(f'Runde {self.round}/{total_rounds}')
-        else:
-            lines.append(f'Runde {self.round}')
-        for role in (1, 2):
-            physical = self.physical_by_role.get(role)
-            if physical in (1, 2):
-                lines.append(f'Versuchsperson {role} → Spieler {physical}')
-        return lines
-
     def player_descriptor(self, player: int) -> str:
         role = self.role_by_physical.get(player)
         if role in (1, 2):
             return f'Versuchsperson {role} – Spieler {player}'
         return f'Spieler {player}'
-
-    def _decision_display_lines(self):
-        lines = []
-        signaler_choice = self.player_signals.get(self.signaler)
-        if signaler_choice:
-            level_text = self.describe_level(signaler_choice)
-            descriptor = self.player_descriptor(self.signaler)
-            lines.append(f'Signal ({descriptor}): {level_text}')
-
-        judge_choice = self.player_decisions.get(self.judge)
-        if judge_choice:
-            decision_text = self.format_decision_choice(judge_choice)
-            descriptor = self.player_descriptor(self.judge)
-            lines.append(f'Urteil ({descriptor}): {decision_text}')
-        return lines
-
-    def _result_display_lines(self):
-        if not self.last_outcome:
-            return []
-
-        truthful = self.last_outcome.get('truthful')
-        judge_choice = self.last_outcome.get('judge_choice')
-        if truthful is None or not judge_choice:
-            return []
-
-        lines = []
-        descriptor_signal = self.player_descriptor(self.signaler)
-        result_signal = 'Wahrheit gesagt' if truthful else 'Geblufft'
-        lines.append(f'Signal-Ergebnis ({descriptor_signal}): {result_signal}')
-
-        descriptor_judge = self.player_descriptor(self.judge)
-        correct = None
-        if judge_choice == 'wahr':
-            correct = truthful
-        elif judge_choice == 'bluff':
-            correct = not truthful
-        if correct is not None:
-            result_text = 'Richtig geraten' if correct else 'Falsch geraten'
-        else:
-            result_text = f'Entscheidung: {self.format_decision_choice(judge_choice) or judge_choice}'
-        lines.append(f'Urteil-Ergebnis ({descriptor_judge}): {result_text}')
-
-        return lines
 
     def _update_outcome_labels(self):
         for label in self.outcome_labels.values():
@@ -1214,10 +1164,10 @@ class TabletopRoot(FloatLayout):
             return ''
 
         summary_map = {
-            (True, 'wahr'): 'Richtiges Signal - Wahrheit entdeckt',
-            (True, 'bluff'): 'Richtiges Signal - Bluff irrtümlich',
-            (False, 'bluff'): 'Falsches Signal - Bluff entdeckt',
-            (False, 'wahr'): 'Falsches Signal - Wahrheit irrtümlich angenommen',
+            (True, 'wahr'): 'Korrektes Signal - korrektes Urteil',
+            (True, 'bluff'): 'Korrektes Signal - falsches Urteil',
+            (False, 'bluff'): 'Falsches Signal - korrektes Urteil',
+            (False, 'wahr'): 'Falsches Signal - falsches Urteil',
         }
         return summary_map.get((truthful, judge_choice), '')
 
@@ -1232,24 +1182,33 @@ class TabletopRoot(FloatLayout):
             return ''
         payout = self.last_outcome.get('payout')
         base = 'Gewonnen' if winner_vp == vp else 'Verloren'
-        prefix = 'Spielergebnis: '
         if not payout:
-            return prefix + base
+            return base
         if not (self.score_state_round_start and self.score_state):
-            return prefix + base
+            return base
         start_score = self.score_state_round_start.get(vp)
         end_score = self.score_state.get(vp)
         if start_score is None or end_score is None:
-            return prefix + base
+            return base
         delta = end_score - start_score
         if delta > 0:
-            return f'{prefix}{base} +{delta}'
+            return f'{base} +{delta}'
         if delta < 0:
-            return f'{prefix}{base} - {abs(delta)}'
-        return prefix + base
+            return f'{base} - {abs(delta)}'
+        return base
 
     def describe_level(self, level:str) -> str:
         return self.format_signal_choice(level) or (level or '-')
+
+    def choice_labels_for_vp(self, vp: int):
+        physical = self.physical_by_role.get(vp)
+        if physical not in (1, 2):
+            return (None, None)
+        if physical == self.signaler:
+            return 'Eigenes Signal', 'Anderes Urteil'
+        if physical == self.judge:
+            return 'Eigenes Urteil', 'Anderes Signal'
+        return (None, None)
 
     def update_role_assignments(self):
         if self.signaler == 1:
