@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -18,18 +18,12 @@ from kivy.config import Config
 
 from game_engine import (
     GameEngine, GameEngineConfig,
-    Player, VP, SignalLevel, Call, hand_value
+    Player, VP, SignalLevel, Call, hand_category
 )
 
 # --- Wahrheitsregel (anpassbar) ---
-def signal_truth_mapping(p1_value: int, level: SignalLevel) -> bool:
-    if level == SignalLevel.HOCH:
-        return p1_value >= 17
-    if level == SignalLevel.MITTEL:
-        return 13 <= p1_value <= 16
-    if level == SignalLevel.TIEF:
-        return p1_value <= 12
-    return False
+def signal_truth_mapping(p1_cards: Tuple[int, int], level: SignalLevel) -> bool:
+    return hand_category(*p1_cards) == level
 
 
 class TwoPlayerUI(BoxLayout):
@@ -85,7 +79,11 @@ class TwoPlayerUI(BoxLayout):
         self.btn_sig1_h = Button(text="hoch", on_release=lambda *_: self._signal_from_vp(VP.VP1, SignalLevel.HOCH))
         self.btn_sig1_m = Button(text="mittel", on_release=lambda *_: self._signal_from_vp(VP.VP1, SignalLevel.MITTEL))
         self.btn_sig1_t = Button(text="tief", on_release=lambda *_: self._signal_from_vp(VP.VP1, SignalLevel.TIEF))
-        row_sig1.add_widget(self.btn_sig1_h); row_sig1.add_widget(self.btn_sig1_m); row_sig1.add_widget(self.btn_sig1_t)
+        self.btn_sig1_u = Button(text="überspiel", on_release=lambda *_: self._signal_from_vp(VP.VP1, SignalLevel.UEBERSPIEL))
+        row_sig1.add_widget(self.btn_sig1_h)
+        row_sig1.add_widget(self.btn_sig1_m)
+        row_sig1.add_widget(self.btn_sig1_t)
+        row_sig1.add_widget(self.btn_sig1_u)
         box_sig1.add_widget(row_sig1)
         # Call (S2)
         box_call1 = BoxLayout(orientation="vertical", spacing=2)
@@ -157,7 +155,11 @@ class TwoPlayerUI(BoxLayout):
         self.btn_sig2_h = Button(text="hoch", on_release=lambda *_: self._signal_from_vp(VP.VP2, SignalLevel.HOCH))
         self.btn_sig2_m = Button(text="mittel", on_release=lambda *_: self._signal_from_vp(VP.VP2, SignalLevel.MITTEL))
         self.btn_sig2_t = Button(text="tief", on_release=lambda *_: self._signal_from_vp(VP.VP2, SignalLevel.TIEF))
-        row_sig2.add_widget(self.btn_sig2_h); row_sig2.add_widget(self.btn_sig2_m); row_sig2.add_widget(self.btn_sig2_t)
+        self.btn_sig2_u = Button(text="überspiel", on_release=lambda *_: self._signal_from_vp(VP.VP2, SignalLevel.UEBERSPIEL))
+        row_sig2.add_widget(self.btn_sig2_h)
+        row_sig2.add_widget(self.btn_sig2_m)
+        row_sig2.add_widget(self.btn_sig2_t)
+        row_sig2.add_widget(self.btn_sig2_u)
         box_sig2.add_widget(row_sig2)
         # Call (S2)
         box_call2 = BoxLayout(orientation="vertical", spacing=2)
@@ -489,8 +491,11 @@ class TwoPlayerUI(BoxLayout):
         if self.engine.current.roles.p2_is != vp:
             return
         rs = self.engine.current
-        p1_val = hand_value(*rs.plan.vp1_cards if rs.roles.p1_is == VP.VP1 else rs.plan.vp2_cards)
-        truth = signal_truth_mapping(p1_val, rs.p1_signal) if rs.p1_signal else None
+        if rs.roles.p1_is == VP.VP1:
+            p1_cards = rs.plan.vp1_cards
+        else:
+            p1_cards = rs.plan.vp2_cards
+        truth = signal_truth_mapping(p1_cards, rs.p1_signal) if rs.p1_signal else None
         try:
             self.engine.p2_call(call, p1_hat_wahrheit_gesagt=truth)
         except Exception as e:
@@ -509,8 +514,8 @@ class TwoPlayerUI(BoxLayout):
                 self.btn_start_vp1, self.btn_start_vp2,
                 self.btn_vp1_c1, self.btn_vp1_c2,
                 self.btn_vp2_c1, self.btn_vp2_c2,
-                self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t,
-                self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t,
+                self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t, self.btn_sig1_u,
+                self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t, self.btn_sig2_u,
                 self.btn_call1_truth, self.btn_call1_bluff,
                 self.btn_call2_truth, self.btn_call2_bluff,
             ]:
@@ -536,8 +541,8 @@ class TwoPlayerUI(BoxLayout):
             self.btn_vp2_c1.disabled = True
             self.btn_vp2_c2.disabled = True
             for btn in [
-                self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t,
-                self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t,
+                self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t, self.btn_sig1_u,
+                self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t, self.btn_sig2_u,
                 self.btn_call1_truth, self.btn_call1_bluff,
                 self.btn_call2_truth, self.btn_call2_bluff,
             ]:
@@ -613,12 +618,14 @@ class TwoPlayerUI(BoxLayout):
         # Signal/Call je Seite abhängig von der Rolle
         enable_sig_vp1 = (ph == "SIGNAL_WAIT" and is_vp1_p1)
         enable_call_vp1 = (ph == "CALL_WAIT" and not is_vp1_p1)
-        self.btn_sig1_h.disabled = self.btn_sig1_m.disabled = self.btn_sig1_t.disabled = not enable_sig_vp1
+        for btn in [self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t, self.btn_sig1_u]:
+            btn.disabled = not enable_sig_vp1
         self.btn_call1_truth.disabled = self.btn_call1_bluff.disabled = not enable_call_vp1
 
         enable_sig_vp2 = (ph == "SIGNAL_WAIT" and is_vp2_p1)
         enable_call_vp2 = (ph == "CALL_WAIT" and not is_vp2_p1)
-        self.btn_sig2_h.disabled = self.btn_sig2_m.disabled = self.btn_sig2_t.disabled = not enable_sig_vp2
+        for btn in [self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t, self.btn_sig2_u]:
+            btn.disabled = not enable_sig_vp2
         self.btn_call2_truth.disabled = self.btn_call2_bluff.disabled = not enable_call_vp2
 
         # Karten (eigene) links/rechts anzeigen
