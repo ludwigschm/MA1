@@ -1215,10 +1215,11 @@ class TabletopRoot(FloatLayout):
         self.round_log_writer = csv.writer(self.round_log_fp)
         if new_file:
             header = [
+                'Session',
                 'Bedingung',
-                'Runde',
+                'Block',
                 'Runde im Block',
-                'Spieler',
+                'Spieler 1',
                 'VP',
                 'Karte1 VP1',
                 'Karte2 VP1',
@@ -1255,11 +1256,16 @@ class TabletopRoot(FloatLayout):
     def write_round_log(self, actor: str, action: str, payload: dict, player: int):
         if not self.round_log_writer:
             return
-        block_label = ''
+        if player not in (1, 2):
+            return
+        if action == 'showdown':
+            return
+        block_condition = ''
+        block_number = ''
         round_in_block = ''
         if self.current_block_info:
-            condition = 'pay' if self.current_round_has_stake else 'no_pay'
-            block_label = f"{self.current_block_info['index']} {condition}"
+            block_condition = 'pay' if self.current_round_has_stake else 'no_pay'
+            block_number = self.current_block_info['index']
             round_in_block = self.round_in_block
         plan = None
         plan_info = self.get_current_plan()
@@ -1271,12 +1277,15 @@ class TabletopRoot(FloatLayout):
             vp1_cards = (None, None)
         if not vp2_cards:
             vp2_cards = (None, None)
-        actor_player = player if player in (1, 2) else ''
         actor_vp = ''
         if player in (1, 2):
             vp_num = self.role_by_physical.get(player)
             if vp_num in (1, 2):
                 actor_vp = f'VP{vp_num}'
+        spieler1_vp = ''
+        vp_player1 = self.role_by_physical.get(1)
+        if vp_player1 in (1, 2):
+            spieler1_vp = f'VP{vp_player1}'
         action_label = self.round_log_action_label(action, payload)
         timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
         winner_label = ''
@@ -1297,10 +1306,11 @@ class TabletopRoot(FloatLayout):
             return '' if val is None else val
 
         row = [
-            block_label,
-            self.round,
+            self.session_id or '',
+            block_condition,
+            block_number,
             round_in_block,
-            actor_player,
+            spieler1_vp,
             actor_vp,
             _card_value(vp1_cards[0]) if vp1_cards else '',
             _card_value(vp1_cards[1]) if vp1_cards else '',
