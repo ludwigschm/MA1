@@ -167,6 +167,8 @@ class IconButton(Button):
         img = self.asset_pair['live'] if (self.live or self.selected) else self.asset_pair['stop']
         self.background_normal = img
         self.background_down = img
+        self.background_disabled_normal = img
+        self.background_disabled_down = img
         self.opacity = 1.0 if (self.live or self.selected) else 0.6
 
 
@@ -247,6 +249,24 @@ class TabletopRoot(FloatLayout):
             )
         }
         for lbl in self.info_labels.values():
+            self.add_widget(lbl)
+
+        self.outcome_labels = {
+            1: RotatedLabel(
+                color=(1, 1, 1, 1),
+                size_hint=(None, None),
+                halign='center',
+                valign='middle'
+            ),
+            2: RotatedLabel(
+                angle=180,
+                color=(1, 1, 1, 1),
+                size_hint=(None, None),
+                halign='center',
+                valign='middle'
+            )
+        }
+        for lbl in self.outcome_labels.values():
             self.add_widget(lbl)
 
         # Spielerzonen (je 2 Karten in den Ecken)
@@ -332,6 +352,7 @@ class TabletopRoot(FloatLayout):
         self.card_cycle = itertools.cycle(['7.png', '8.png', '9.png', '10.png', '11.png'])
 
         self.update_layout()
+        self._update_outcome_labels()
 
     def update_layout(self):
         W, H = Window.size
@@ -349,12 +370,12 @@ class TabletopRoot(FloatLayout):
         # Start buttons
         self.btn_start_p1.size = start_size
         start_margin = 60 * scale
-        self.btn_start_p1.pos = (start_margin, start_margin)
-        self.btn_start_p1.set_rotation(0)
+        self.btn_start_p1.pos = (start_margin, H - start_margin - start_size[1])
+        self.btn_start_p1.set_rotation(180)
 
         self.btn_start_p2.size = start_size
-        self.btn_start_p2.pos = (W - start_margin - start_size[0], H - start_margin - start_size[1])
-        self.btn_start_p2.set_rotation(180)
+        self.btn_start_p2.pos = (W - start_margin - start_size[0], start_margin)
+        self.btn_start_p2.set_rotation(0)
 
         # Cards positions
         p1_outer_pos = (corner_margin, corner_margin)
@@ -375,11 +396,12 @@ class TabletopRoot(FloatLayout):
         btn_width, btn_height = 260 * scale, 260 * scale
         vertical_gap = 40 * scale
         horizontal_gap = 60 * scale
-        cluster_shift = 360 * scale
+        cluster_shift = 620 * scale
+        vertical_offset = 140 * scale
 
         # Player 1 (bottom right)
         signal_x = W - corner_margin - btn_width - cluster_shift
-        base_y = corner_margin
+        base_y = corner_margin + vertical_offset
         for idx, level in enumerate(['low', 'mid', 'high']):
             btn = self.signal_buttons[1][level]
             btn.size = (btn_width, btn_height)
@@ -395,7 +417,7 @@ class TabletopRoot(FloatLayout):
 
         # Player 2 (top left)
         signal2_x = corner_margin + cluster_shift
-        top_y = H - corner_margin
+        top_y = H - corner_margin - vertical_offset
         for idx, level in enumerate(['low', 'mid', 'high']):
             btn = self.signal_buttons[2][level]
             btn.size = (btn_width, btn_height)
@@ -446,6 +468,24 @@ class TabletopRoot(FloatLayout):
         top_label.text_size = (info_width, info_height)
         top_label.set_rotation(180)
 
+        # Outcome labels per player (above clusters)
+        outcome_width = btn_width * 2 + horizontal_gap
+        outcome_height = 120 * scale
+
+        bottom_outcome = self.outcome_labels[1]
+        bottom_outcome.size = (outcome_width, outcome_height)
+        bottom_outcome.font_size = 64 * scale if scale else 64
+        bottom_outcome.pos = (decision_x, base_y + 2 * (btn_height + vertical_gap))
+        bottom_outcome.text_size = (outcome_width, outcome_height)
+        bottom_outcome.set_rotation(0)
+
+        top_outcome = self.outcome_labels[2]
+        top_outcome.size = (outcome_width, outcome_height)
+        top_outcome.font_size = 64 * scale if scale else 64
+        top_outcome.pos = (decision2_x, top_y - 2 * (btn_height + vertical_gap) - outcome_height)
+        top_outcome.text_size = (outcome_width, outcome_height)
+        top_outcome.set_rotation(180)
+
         # Round badge
         badge_width, badge_height = 1400 * scale, 70 * scale
         self.round_badge.size = (badge_width, badge_height)
@@ -463,6 +503,8 @@ class TabletopRoot(FloatLayout):
         self.btn_start_p1._update_transform()
         self.btn_start_p2._update_transform()
         for lbl in self.info_labels.values():
+            lbl._update_transform()
+        for lbl in self.outcome_labels.values():
             lbl._update_transform()
 
     # --- Logik
@@ -742,6 +784,16 @@ class TabletopRoot(FloatLayout):
         ]
         self.info_labels['bottom'].text = "\n".join(bottom_lines)
         self.info_labels['top'].text = "\n".join(top_lines)
+        self._update_outcome_labels()
+
+    def _update_outcome_labels(self):
+        show_results = (self.phase == PH_SHOWDOWN)
+        for player, label in self.outcome_labels.items():
+            if show_results:
+                text = self.result_text(player)
+                label.text = '' if text == '-' else text
+            else:
+                label.text = ''
 
     def describe_level(self, level:str) -> str:
         mapping = {
