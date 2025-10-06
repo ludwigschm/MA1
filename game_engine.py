@@ -187,6 +187,25 @@ def hand_category_label(a: int, b: int) -> str:
     level = hand_category(a, b)
     return FORCED_BLUFF_LABEL if level is None else level.value
 
+
+def hand_category(a: int, b: int) -> SignalLevel:
+    total = a + b
+    if total in (20, 21, 22):
+        return SignalLevel.UEBERSPIEL
+    if total == 19:
+        return SignalLevel.HOCH
+    if total in (17, 18):
+        return SignalLevel.MITTEL
+    if total in (14, 15, 16):
+        return SignalLevel.TIEF
+    # Falls Werte außerhalb des erwarteten Bereichs auftauchen, ordnen wir sie dem
+    # nächsten sinnvollen Bereich zu, statt einen Laufzeitfehler zu riskieren.
+    if total > 22:
+        return SignalLevel.UEBERSPIEL
+    if total >= 17:
+        return SignalLevel.MITTEL
+    return SignalLevel.TIEF
+
 @dataclass
 class SessionCsvLogger:
     HEADER = [

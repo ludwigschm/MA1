@@ -510,8 +510,8 @@ class TwoPlayerUI(BoxLayout):
                 self.btn_start_vp1, self.btn_start_vp2,
                 self.btn_vp1_c1, self.btn_vp1_c2,
                 self.btn_vp2_c1, self.btn_vp2_c2,
-                self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t,
-                self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t,
+                self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t, self.btn_sig1_u,
+                self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t, self.btn_sig2_u,
                 self.btn_call1_truth, self.btn_call1_bluff,
                 self.btn_call2_truth, self.btn_call2_bluff,
             ]:
@@ -537,8 +537,8 @@ class TwoPlayerUI(BoxLayout):
             self.btn_vp2_c1.disabled = True
             self.btn_vp2_c2.disabled = True
             for btn in [
-                self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t,
-                self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t,
+                self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t, self.btn_sig1_u,
+                self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t, self.btn_sig2_u,
                 self.btn_call1_truth, self.btn_call1_bluff,
                 self.btn_call2_truth, self.btn_call2_bluff,
             ]:
