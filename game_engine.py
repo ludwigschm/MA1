@@ -73,8 +73,9 @@ class RoundState:
 
 class RoundSchedule:
     """
-    CSV: pro Zeile eine Runde. Spalten 2–5 (Index 1–4) -> VP1; Spalten 6–10 (Index 5–9) -> VP2.
-    Jeweils die ersten zwei nicht-leeren Einträge als Karten (int).
+    CSV: pro Zeile eine Runde. Für VP1 werden die Spalten 2–5 (Index 1–4) ausgewertet,
+    für VP2 die Spalten 8–11 (Index 7–10). Aus dem jeweiligen Bereich werden die ersten
+    beiden nicht-leeren Integer-Werte als Karten interpretiert.
     """
     def __init__(self, csv_path: str):
         self.rounds: List[RoundPlan] = self._load(csv_path)
@@ -98,14 +99,14 @@ class RoundSchedule:
             rows = list(csv.reader(f))
         start = 0
         try:
-            self._parse_two(rows[0], 1, 5); self._parse_two(rows[0], 5, 10)
+            self._parse_two(rows[0], 1, 5); self._parse_two(rows[0], 7, 11)
         except Exception:
             start = 1
         out = []
         for r in rows[start:]:
             if not r or all((c or "").strip()=="" for c in r): continue
             vp1 = self._parse_two(r, 1, 5)
-            vp2 = self._parse_two(r, 5, 10)
+            vp2 = self._parse_two(r, 7, 11)
             out.append(RoundPlan(vp1_cards=vp1, vp2_cards=vp2))
         if not out: raise ValueError("Keine Runden in CSV gefunden.")
         return out
