@@ -29,6 +29,7 @@ class SignalLevel(Enum):
     HOCH = "hoch"
     MITTEL = "mittel"
     TIEF = "tief"
+    UEBERSPIEL = "überspiel"
 
 class Call(Enum):
     WAHRHEIT = "wahrheit"
@@ -160,6 +161,25 @@ def hand_value(a: int, b: int) -> int:
     s = a + b
     return 0 if s in (20, 21, 22) else s
 
+
+def hand_category(a: int, b: int) -> SignalLevel:
+    total = a + b
+    if total in (20, 21, 22):
+        return SignalLevel.UEBERSPIEL
+    if total == 19:
+        return SignalLevel.HOCH
+    if total in (17, 18):
+        return SignalLevel.MITTEL
+    if total in (14, 15, 16):
+        return SignalLevel.TIEF
+    # Falls Werte außerhalb des erwarteten Bereichs auftauchen, ordnen wir sie dem
+    # nächsten sinnvollen Bereich zu, statt einen Laufzeitfehler zu riskieren.
+    if total > 22:
+        return SignalLevel.UEBERSPIEL
+    if total >= 17:
+        return SignalLevel.MITTEL
+    return SignalLevel.TIEF
+
 @dataclass
 class SessionCsvLogger:
     HEADER = [
@@ -288,7 +308,7 @@ class GameEngine:
         condition_slug = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_"
                                    for ch in cfg.condition.lower())
         session_csv_path = pathlib.Path(cfg.log_dir) / (
-            f"session_{session_identifier}_block{cfg.block}_{condition_slug}.csv"
+            f"session_{session_identifier}_{condition_slug}.csv"
         )
         self.session_csv = SessionCsvLogger(session_csv_path)
         self.scores: Optional[Dict[VP, int]] = None
@@ -401,14 +421,21 @@ class GameEngine:
         if self.current.p2_call is not None:
             raise RuntimeError("Call bereits gesetzt.")
         self.current.p2_call = call
-        winner, reason = self._compute_winner(call, p1_hat_wahrheit_gesagt)
+        outcome = self._resolve_outcome(call)
+        winner, reason, actual_truth = outcome
         self.current.winner = winner
         self.current.outcome_reason = reason
         self._update_scores(winner)
 
         payload_call: Dict[str, Any] = {"call": call.value}
-        if p1_hat_wahrheit_gesagt is not None:
-            payload_call["p1_truth"] = bool(p1_hat_wahrheit_gesagt)
+        if actual_truth is not None:
+            payload_call["p1_truth"] = actual_truth
+        if (
+            p1_hat_wahrheit_gesagt is not None
+            and actual_truth is not None
+            and bool(p1_hat_wahrheit_gesagt) != actual_truth
+        ):
+            payload_call["p1_truth_ui"] = bool(p1_hat_wahrheit_gesagt)
         if winner is not None:
             payload_call["winner"] = winner.value
         if self.scores is not None:
@@ -427,6 +454,8 @@ class GameEngine:
             "reason": reason,
             "vp1_cards": vp1, "vp2_cards": vp2,
             "vp1_value": hand_value(*vp1), "vp2_value": hand_value(*vp2),
+            "vp1_category": hand_category(*vp1).value,
+            "vp2_category": hand_category(*vp2).value,
             "roles": {"P1": self.current.roles.p1_is.value, "P2": self.current.roles.p2_is.value}
         })
 
@@ -472,39 +501,79 @@ class GameEngine:
 
     # --- Interna ---
 
-    def _compute_winner(self, call: Call, p1_truth: Optional[bool]) -> Tuple[Optional[Player], str]:
-        if p1_truth is None:
-            return (None, "Unbestimmt: p1_hat_wahrheit_gesagt fehlt (Signal→Wahrheit-Mapping notwendig).")
+    def _determine_truth(self) -> Tuple[Optional[bool], Optional[SignalLevel], Optional[SignalLevel]]:
+        signal = self.current.p1_signal
+        if signal is None:
+            return (None, None, None)
+        p1_cards = self._cards_of(Player.P1)
+        p2_cards = self._cards_of(Player.P2)
+        p1_category = hand_category(*p1_cards)
+        p2_category = hand_category(*p2_cards)
+        return (signal == p1_category, p1_category, p2_category)
 
-        # „P1“/„P2“ sind hier rollenspezifisch (aktueller Spieler 1/2)
-        # Handwerte: über VPs ermitteln
-        vp1_val = hand_value(*self.current.plan.vp1_cards)
-        vp2_val = hand_value(*self.current.plan.vp2_cards)
+    def _resolve_outcome(self, call: Call) -> Tuple[Optional[Player], str, Optional[bool]]:
+        actual_truth, p1_category, _ = self._determine_truth()
 
-        # Wer ist aktuell Spieler 1? (kann VP1 oder VP2 sein)
-        p1_vp = self.current.roles.p1_is
-        p2_vp = self.current.roles.p2_is
-        p1_val = vp1_val if p1_vp == VP.VP1 else vp2_val
-        p2_val = vp2_val if p2_vp == VP.VP2 else vp1_val
+        if actual_truth is None:
+            return (
+                None,
+                "Unbestimmt: Kein Signal gesetzt, Ergebnis kann nicht berechnet werden.",
+                None,
+            )
 
-        if p1_truth and call == Call.BLUFF:
-            return (Player.P1, "P1 sagte Wahrheit, P2 sagte Bluff → P1 gewinnt.")
-        if (not p1_truth) and call == Call.BLUFF:
-            return (Player.P2, "P1 bluffte, P2 erkannte Bluff → P2 gewinnt.")
+        # Werte für Vergleich (20/21/22 werden als 0 behandelt)
+        p1_cards = self._cards_of(Player.P1)
+        p2_cards = self._cards_of(Player.P2)
+        p1_val = hand_value(*p1_cards)
+        p2_val = hand_value(*p2_cards)
 
-        # call == Wahrheit (P2 glaubt)
-        if call == Call.WAHRHEIT:
-            if p1_truth:
-                if p1_val > p2_val:
-                    return (Player.P1, f"P2 glaubte, Vergleich: {p1_val} vs {p2_val} → P1 gewinnt.")
-                elif p2_val > p1_val:
-                    return (Player.P2, f"P2 glaubte, Vergleich: {p1_val} vs {p2_val} → P2 gewinnt.")
-                else:
-                    return (None, f"P2 glaubte, Vergleich: {p1_val} vs {p2_val} → Unentschieden.")
-            else:
-                return (Player.P1, "P1 bluffte, P2 glaubte → P1 gewinnt.")
+        if call == Call.BLUFF:
+            if actual_truth:
+                return (
+                    Player.P1,
+                    "P1 sagte die richtige Kategorie, P2 erwartete Bluff → P1 gewinnt.",
+                    actual_truth,
+                )
+            return (
+                Player.P2,
+                "P1 bluffte über die Kategorie, P2 erkannte den Bluff → P2 gewinnt.",
+                actual_truth,
+            )
 
-        return (None, "Unerwartete Konstellation.")
+        # call == Wahrheit
+        if actual_truth:
+            if p1_val > p2_val:
+                return (
+                    Player.P1,
+                    (
+                        f"P1 sagte {p1_category.value} (korrekt), P2 glaubte → "
+                        f"{p1_val} vs {p2_val} → P1 gewinnt."
+                    ),
+                    actual_truth,
+                )
+            if p2_val > p1_val:
+                return (
+                    Player.P2,
+                    (
+                        f"P1 sagte {p1_category.value} (korrekt), P2 glaubte → "
+                        f"{p1_val} vs {p2_val} → P2 gewinnt."
+                    ),
+                    actual_truth,
+                )
+            return (
+                None,
+                (
+                    f"P1 sagte {p1_category.value} (korrekt), P2 glaubte → "
+                    f"{p1_val} vs {p2_val} → Unentschieden."
+                ),
+                actual_truth,
+            )
+
+        return (
+            Player.P1,
+            "P1 bluffte über die Kategorie, P2 glaubte → P1 gewinnt.",
+            actual_truth,
+        )
 
     def _advance_and_swap_roles(self):
         self.round_idx += 1
