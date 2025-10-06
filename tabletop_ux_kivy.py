@@ -590,6 +590,23 @@ class TabletopRoot(FloatLayout):
                 raise ValueError('Zu wenige Karten')
             return tuple(values[:2])
 
+        def parse_numeric(cell):
+            if cell is None:
+                return None
+            if isinstance(cell, (int, float)):
+                return int(cell)
+            text = str(cell).strip().replace(',', '.')
+            if not text:
+                return None
+            try:
+                return int(float(text))
+            except ValueError:
+                return None
+
+        def parse_category(cell):
+            text = (cell or '').strip().strip('"').lower()
+            return text or None
+
         start_idx = 0
         if rows:
             try:
@@ -606,7 +623,29 @@ class TabletopRoot(FloatLayout):
                 vp2_cards = parse_cards(row, 7, 9)
             except Exception:
                 continue
-            rounds.append({'vp1': vp1_cards, 'vp2': vp2_cards})
+
+            vp1_value = parse_numeric(row[5]) if len(row) > 5 else None
+            vp2_value = parse_numeric(row[10]) if len(row) > 10 else None
+            vp1_category = parse_category(row[1]) if len(row) > 1 else None
+            vp2_category = parse_category(row[6]) if len(row) > 6 else None
+
+            if vp1_value is None:
+                total = sum(vp1_cards)
+                vp1_value = 0 if total in (20, 21, 22) else total
+            if vp2_value is None:
+                total = sum(vp2_cards)
+                vp2_value = 0 if total in (20, 21, 22) else total
+
+            rounds.append(
+                {
+                    'vp1': vp1_cards,
+                    'vp2': vp2_cards,
+                    'vp1_value': vp1_value,
+                    'vp2_value': vp2_value,
+                    'vp1_category': vp1_category,
+                    'vp2_category': vp2_category,
+                }
+            )
         return rounds
 
     def value_to_card_path(self, value):
@@ -617,6 +656,75 @@ class TabletopRoot(FloatLayout):
         filename = f'{number}.png'
         path = os.path.join(CARD_DIR, filename)
         return path if os.path.exists(path) else ASSETS['cards']['back']
+
+    @staticmethod
+    def _parse_value(value):
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return int(value)
+        text = str(value).strip().replace(',', '.')
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except ValueError:
+            return None
+
+    def get_hand_value_for_role(self, role: int):
+        if role not in (1, 2):
+            return None
+        plan_info = self.get_current_plan()
+        if not plan_info:
+            return None
+        _, plan = plan_info
+        if not plan:
+            return None
+        value = plan.get(f'vp{role}_value')
+        parsed = self._parse_value(value)
+        if parsed is not None:
+            return parsed
+        cards = plan.get(f'vp{role}')
+        if not cards or any(card is None for card in cards):
+            return None
+        total = sum(cards)
+        return 0 if total in (20, 21, 22) else total
+
+    def get_hand_value_for_player(self, player: int):
+        role = self.role_by_physical.get(player)
+        value = self.get_hand_value_for_role(role)
+        if value is not None:
+            return value
+        if player == 1:
+            inner_widget, outer_widget = self.p1_inner, self.p1_outer
+        else:
+            inner_widget, outer_widget = self.p2_inner, self.p2_outer
+        inner_val = self.card_value_from_path(inner_widget.front_image)
+        outer_val = self.card_value_from_path(outer_widget.front_image)
+        if inner_val is None or outer_val is None:
+            return None
+        total = inner_val + outer_val
+        return 0 if total in (20, 21, 22) else total
+
+    def signal_level_from_value(self, value):
+        parsed = self._parse_value(value)
+        if parsed is None:
+            return None
+        if parsed <= 0:
+            return None
+        if parsed in (20, 21, 22):
+            return None
+        if parsed == 19:
+            return 'high'
+        if parsed in (16, 17, 18):
+            return 'mid'
+        if parsed in (14, 15):
+            return 'low'
+        if parsed > 22:
+            return None
+        if parsed >= 16:
+            return 'mid'
+        return 'low'
 
     def set_cards_from_plan(self, plan):
         if plan:
@@ -918,6 +1026,7 @@ class TabletopRoot(FloatLayout):
             'winner': None,
             'truthful': None,
             'actual_level': None,
+            'actual_value': None,
             'signal_choice': None,
             'judge_choice': None,
             'payout': self.current_round_has_stake,
@@ -976,29 +1085,16 @@ class TabletopRoot(FloatLayout):
             return None
 
     def determine_signal_level(self, player: int):
-        if player == 1:
-            inner_widget, outer_widget = self.p1_inner, self.p1_outer
-        else:
-            inner_widget, outer_widget = self.p2_inner, self.p2_outer
-        inner_val = self.card_value_from_path(inner_widget.front_image)
-        outer_val = self.card_value_from_path(outer_widget.front_image)
-        if inner_val is None or outer_val is None:
-            return None
-        total = inner_val + outer_val
-        if total == 19:
-            return 'high'
-        if total in (16, 17, 18):
-            return 'mid'
-        if total in (14, 15):
-            return 'low'
-        return None
+        value = self.get_hand_value_for_player(player)
+        return self.signal_level_from_value(value)
 
     def compute_outcome(self):
         signaler = self.signaler
         judge = self.judge
         signal_choice = self.player_signals.get(signaler)
         judge_choice = self.player_decisions.get(judge)
-        actual_level = self.determine_signal_level(signaler)
+        actual_value = self.get_hand_value_for_player(signaler)
+        actual_level = self.signal_level_from_value(actual_value)
 
         truthful = None
         if signal_choice and actual_level:
@@ -1015,6 +1111,7 @@ class TabletopRoot(FloatLayout):
             'winner': winner,
             'truthful': truthful,
             'actual_level': actual_level,
+            'actual_value': actual_value,
             'signal_choice': signal_choice,
             'judge_choice': judge_choice,
             'payout': self.current_round_has_stake,
