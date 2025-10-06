@@ -9,6 +9,8 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.uix.image import Image
+from kivy.uix.popup import Popup
+from kivy.uix.textinput import TextInput
 from kivy.config import Config
 
 # Optional Vollbild
@@ -38,13 +40,11 @@ class TwoPlayerUI(BoxLayout):
         self.card_dir = base / "Karten"
         self.img_back = str(self.card_dir / "back.png") if (self.card_dir / "back.png").exists() else ""
 
-        cfg = GameEngineConfig(
-            session_id="S001",
-            csv_path=str(base / "Paare1.csv"),
-            db_path=str(base / "logs" / "events.sqlite3"),
-            csv_log_path=str(base / "logs" / "events.csv"),
-        )
-        self.engine = GameEngine(cfg)
+        self.base = base
+        self.engine: Optional[GameEngine] = None
+        self.session_popup: Optional[Popup] = None
+        self._session_inputs = {}
+        self.session_message = ""
 
         # Kopfzeile
         header = BoxLayout(orientation="horizontal", size_hint_y=None, height=46, spacing=8)
@@ -180,6 +180,89 @@ class TwoPlayerUI(BoxLayout):
         self.add_widget(self.board)
 
         Clock.schedule_interval(lambda dt: self.refresh(), 0.1)
+        Clock.schedule_once(lambda dt: self._open_session_dialog(), 0.1)
+        self.refresh()
+
+    def _open_session_dialog(self):
+        if self.session_popup:
+            return
+
+        content = BoxLayout(orientation="vertical", spacing=8, padding=8)
+        form = GridLayout(cols=2, spacing=6, size_hint_y=None)
+        form.bind(minimum_height=form.setter("height"))
+
+        def add_field(label_text: str, key: str, default: str, **kwargs):
+            form.add_widget(Label(text=label_text, size_hint_y=None, height=32))
+            ti = TextInput(text=default, multiline=False, **kwargs)
+            form.add_widget(ti)
+            self._session_inputs[key] = ti
+
+        add_field("Session (Zahl)", "session", "", input_filter="int")
+        add_field("Block", "block", "1", input_filter="int")
+        add_field("Bedingung", "condition", "no_payout")
+
+        content.add_widget(form)
+        self._session_error = Label(text="", color=(1, 0, 0, 1), size_hint_y=None, height=24)
+        content.add_widget(self._session_error)
+
+        btn_box = BoxLayout(size_hint_y=None, height=44, spacing=8)
+        btn_ok = Button(text="Start", on_release=lambda *_: self._confirm_session())
+        btn_box.add_widget(btn_ok)
+        content.add_widget(btn_box)
+
+        popup = Popup(title="Sessiondaten", content=content, size_hint=(0.6, 0.5), auto_dismiss=False)
+        self.session_popup = popup
+        popup.open()
+
+    def _confirm_session(self):
+        session_text = self._session_inputs["session"].text.strip()
+        block_text = self._session_inputs["block"].text.strip()
+        condition_text = self._session_inputs["condition"].text.strip() or "no_payout"
+
+        try:
+            session_num = int(session_text)
+            if session_num <= 0:
+                raise ValueError
+        except ValueError:
+            self._session_error.text = "Bitte eine positive Session-Zahl eingeben."
+            return
+
+        try:
+            block_num = int(block_text) if block_text else 1
+            if block_num <= 0:
+                raise ValueError
+        except ValueError:
+            self._session_error.text = "Block muss eine positive Zahl sein."
+            return
+
+        condition = condition_text or "no_payout"
+
+        csv_file = self.base / f"Paare{block_num}.csv"
+        if not csv_file.exists():
+            self._session_error.text = f"CSV für Block {block_num} nicht gefunden."
+            return
+
+        session_id = f"S{session_num:03d}"
+        log_dir = self.base / "logs"
+        cfg = GameEngineConfig(
+            session_id=session_id,
+            session_number=session_num,
+            block=block_num,
+            condition=condition,
+            csv_path=str(csv_file),
+            db_path=str(log_dir / f"events_{session_id}.sqlite3"),
+            csv_log_path=None,
+            log_dir=str(log_dir),
+        )
+
+        if self.engine:
+            self.engine.close()
+
+        self.engine = GameEngine(cfg)
+        if self.session_popup:
+            self.session_popup.dismiss()
+            self.session_popup = None
+        self.session_message = f"Session {session_num}, Block {block_num}, {condition}"
         self.refresh()
 
     # ===== Helper =====
@@ -190,11 +273,15 @@ class TwoPlayerUI(BoxLayout):
         return str(p) if p.exists() else self.img_back
 
     def _player_for_vp(self, vp: VP) -> Player:
+        if not self.engine:
+            raise RuntimeError("Engine nicht initialisiert")
         r = self.engine.current.roles
         return Player.P1 if r.p1_is == vp else Player.P2
 
     def _revealed(self, vp: VP, idx: int) -> bool:
         """Direkt aus dem Engine-Inneren lesen (robuster)."""
+        if not self.engine:
+            return False
         vis = self.engine.current.vis
         roles = self.engine.current.roles
         if roles.p1_is == vp:
@@ -204,6 +291,8 @@ class TwoPlayerUI(BoxLayout):
 
     def _expected_reveal(self):
         """Welcher VP ist als nächstes dran (rollenrichtig) und welche Karte (0/1)?"""
+        if not self.engine:
+            return None
         st = self.engine.get_public_state()
         if st["phase"] != "DEALING":
             return None
@@ -223,6 +312,8 @@ class TwoPlayerUI(BoxLayout):
 
     # ===== Actions =====
     def _start_or_next_for_vp(self, vp: VP):
+        if not self.engine:
+            return
         st = self.engine.get_public_state()
         player = self._player_for_vp(vp)
         try:
@@ -235,6 +326,8 @@ class TwoPlayerUI(BoxLayout):
         self.refresh()
 
     def _reveal(self, vp: VP, idx: int):
+        if not self.engine:
+            return
         try:
             p = self._player_for_vp(vp)
             self.engine.click_reveal_card(p, idx)
@@ -244,6 +337,8 @@ class TwoPlayerUI(BoxLayout):
 
     def _signal_from_vp(self, vp: VP, level: SignalLevel):
         # Nur die VP, die gerade Spieler 1 ist, darf signalen
+        if not self.engine:
+            return
         if self.engine.current.roles.p1_is != vp:
             return
         try:
@@ -254,6 +349,8 @@ class TwoPlayerUI(BoxLayout):
 
     def _call_from_vp(self, vp: VP, call: Call):
         # Nur die VP, die gerade Spieler 2 ist, darf callen
+        if not self.engine:
+            return
         if self.engine.current.roles.p2_is != vp:
             return
         rs = self.engine.current
@@ -267,12 +364,42 @@ class TwoPlayerUI(BoxLayout):
 
     # ===== Refresh =====
     def refresh(self):
+        if not self.engine:
+            self.lbl_status.text = "Session wählen"
+            self.lbl_roles.text = ""
+            self.lbl_next.text = "Nächster Zug: –"
+            self.lbl_info.text = "Bitte Sessiondaten bestätigen."
+            self.btn_start_vp1.disabled = True
+            self.btn_start_vp2.disabled = True
+            self.btn_vp1_c1.disabled = True
+            self.btn_vp1_c2.disabled = True
+            self.btn_vp2_c1.disabled = True
+            self.btn_vp2_c2.disabled = True
+            for btn in [
+                self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t,
+                self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t,
+                self.btn_call1_truth, self.btn_call1_bluff,
+                self.btn_call2_truth, self.btn_call2_bluff,
+            ]:
+                btn.disabled = True
+            for img in [self.vp1_img1, self.vp1_img2, self.vp2_img1, self.vp2_img2]:
+                img.source = self.img_back
+                img.reload()
+            for img in [self.mid_vp1_1, self.mid_vp1_2, self.mid_vp2_1, self.mid_vp2_2]:
+                img.source = ""
+                img.reload()
+            return
+
         st = self.engine.get_public_state()
         rs = self.engine.current
 
         self.lbl_status.text = f"Runde {st['round_index']+1} – Phase: {st['phase']}"
         self.lbl_roles.text = f"Rollen: S1={st['roles']['P1']} | S2={st['roles']['P2']}"
-        self.lbl_info.text = st.get("outcome_reason") or ""
+        outcome = st.get("outcome_reason")
+        if outcome:
+            self.lbl_info.text = outcome
+        else:
+            self.lbl_info.text = self.session_message
 
         # S1/S2-Beschriftung korrekt je Seite
         is_vp1_p1 = (st["roles"]["P1"] == "VP1")
@@ -346,6 +473,11 @@ class TwoPlayerUI(BoxLayout):
 class TouchGameApp(App):
     def build(self):
         return TwoPlayerUI()
+
+    def on_stop(self):
+        root = self.root
+        if root and getattr(root, "engine", None):
+            root.engine.close()
 
 
 if __name__ == "__main__":
