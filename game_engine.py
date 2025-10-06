@@ -165,7 +165,7 @@ class SessionCsvLogger:
     HEADER = [
         "Spiel", "Block", "Bedingung", "Runde", "Spieler", "VP",
         "Karte1 VP1", "Karte2 VP1", "Karte1 VP2", "Karte2 VP2",
-        "Taste", "Time", "Gewinner",
+        "Taste", "Time", "Gewinner", "Punkte VP1", "Punkte VP2",
     ]
 
     def __init__(self, path: pathlib.Path):
@@ -197,7 +197,9 @@ class SessionCsvLogger:
         return action
 
     def log(self, cfg: "GameEngineConfig", rs: RoundState,
-            actor: str, action: str, payload: Dict[str, Any], timestamp_iso: str):
+            actor: str, action: str, payload: Dict[str, Any], timestamp_iso: str,
+            round_index_override: Optional[int] = None,
+            scores: Optional[Dict[VP, int]] = None):
         if actor == "SYS":
             return
         if cfg.session_number is None:
@@ -219,11 +221,18 @@ class SessionCsvLogger:
         if not winner and rs.winner is not None:
             winner = rs.winner.value
 
+        round_idx = rs.index if round_index_override is None else round_index_override
+        score_vp1 = ""
+        score_vp2 = ""
+        if scores:
+            score_vp1 = scores.get(VP.VP1, "")
+            score_vp2 = scores.get(VP.VP2, "")
+
         row = [
             session_value,
             cfg.block,
             cfg.condition,
-            rs.index + 1,
+            round_idx + 1,
             actor if actor != "SYS" else "",
             vp_actor,
             vp1_cards[0],
@@ -233,6 +242,8 @@ class SessionCsvLogger:
             self._action_label(actor, action, payload),
             timestamp_iso,
             winner,
+            score_vp1,
+            score_vp2,
         ]
         self._writer.writerow(row)
         self._fp.flush()
@@ -251,6 +262,8 @@ class GameEngineConfig:
     block: int = 1
     condition: str = "no_payout"
     log_dir: str = "logs"
+    payout: bool = False
+    payout_start_points: int = 0
 
     def __post_init__(self):
         if self.session_number is None:
@@ -278,6 +291,10 @@ class GameEngine:
             f"session_{session_identifier}_block{cfg.block}_{condition_slug}.csv"
         )
         self.session_csv = SessionCsvLogger(session_csv_path)
+        self.scores: Optional[Dict[VP, int]] = None
+        if cfg.payout:
+            start_points = cfg.payout_start_points
+            self.scores = {VP.VP1: start_points, VP.VP2: start_points}
         # Runde 1: VP1 ist Spieler 1, VP2 ist Spieler 2
         roles = RoleMap(p1_is=VP.VP1, p2_is=VP.VP2)
         self.round_idx = 0
@@ -288,16 +305,38 @@ class GameEngine:
         if self.current.phase not in allowed:
             raise RuntimeError(f"Falsche Phase: {self.current.phase.name}")
 
-    def _log(self, actor: str, action: str, payload: Dict[str, Any]):
+    def _score_snapshot(self) -> Optional[Dict[VP, int]]:
+        if self.scores is None:
+            return None
+        return {VP.VP1: self.scores[VP.VP1], VP.VP2: self.scores[VP.VP2]}
+
+    def _log(self, actor: str, action: str, payload: Dict[str, Any],
+             round_index_override: Optional[int] = None):
+        round_idx = self.current.index if round_index_override is None else round_index_override
         data = self.logger.log(
-            self.cfg.session_id, self.current.index, self.current.phase, actor, action, payload
+            self.cfg.session_id, round_idx, self.current.phase, actor, action, payload
         )
-        self.session_csv.log(self.cfg, self.current, actor, action, payload, data["t_utc_iso"])
+        self.session_csv.log(
+            self.cfg, self.current, actor, action, payload, data["t_utc_iso"],
+            round_index_override=round_idx, scores=self._score_snapshot()
+        )
 
     def _cards_of(self, player: Player) -> Tuple[int,int]:
         # Hole Karten der VP, die aktuell diese Spielerrolle hat
         vp = self.current.roles.p1_is if player == Player.P1 else self.current.roles.p2_is
         return (self.current.plan.vp1_cards if vp == VP.VP1 else self.current.plan.vp2_cards)
+
+    def _update_scores(self, winner: Optional[Player]):
+        if self.scores is None or winner is None:
+            return
+        if winner == Player.P1:
+            winner_vp = self.current.roles.p1_is
+            loser_vp = self.current.roles.p2_is
+        else:
+            winner_vp = self.current.roles.p2_is
+            loser_vp = self.current.roles.p1_is
+        self.scores[winner_vp] += 1
+        self.scores[loser_vp] -= 1
 
     # --- Öffentliche API (UI) ---
 
@@ -365,12 +404,18 @@ class GameEngine:
         winner, reason = self._compute_winner(call, p1_hat_wahrheit_gesagt)
         self.current.winner = winner
         self.current.outcome_reason = reason
+        self._update_scores(winner)
 
         payload_call: Dict[str, Any] = {"call": call.value}
         if p1_hat_wahrheit_gesagt is not None:
             payload_call["p1_truth"] = bool(p1_hat_wahrheit_gesagt)
         if winner is not None:
             payload_call["winner"] = winner.value
+        if self.scores is not None:
+            payload_call["scores"] = {
+                VP.VP1.value: self.scores[VP.VP1],
+                VP.VP2.value: self.scores[VP.VP2],
+            }
         self._log("P2", "call", payload_call)
 
         # Für Reveal/Score: echte Kartenwerte beider VPs
@@ -391,10 +436,15 @@ class GameEngine:
     def click_next_round(self, player: Player):
         """ Beide drücken 'Nächste Runde'. Danach: Rollen tauschen, nächste Runde → DEALING. """
         self._ensure([Phase.ROUND_DONE])
+        next_round_idx = self.current.index
+        if self.current.index + 1 < len(self.schedule.rounds):
+            next_round_idx = self.current.index + 1
         if player == Player.P1 and not self.current.next_ready_p1:
-            self.current.next_ready_p1 = True; self._log("P1", "next_round_click", {})
+            self.current.next_ready_p1 = True
+            self._log("P1", "next_round_click", {}, round_index_override=next_round_idx)
         if player == Player.P2 and not self.current.next_ready_p2:
-            self.current.next_ready_p2 = True; self._log("P2", "next_round_click", {})
+            self.current.next_ready_p2 = True
+            self._log("P2", "next_round_click", {}, round_index_override=next_round_idx)
 
         if self.current.next_ready_p1 and self.current.next_ready_p2:
             self._advance_and_swap_roles()
@@ -414,6 +464,10 @@ class GameEngine:
             "p2_call": None if rs.p2_call is None else rs.p2_call.value,
             "winner": None if rs.winner is None else rs.winner.value,
             "outcome_reason": rs.outcome_reason,
+            "scores": None if self.scores is None else {
+                VP.VP1.value: self.scores[VP.VP1],
+                VP.VP2.value: self.scores[VP.VP2],
+            },
         }
 
     # --- Interna ---
