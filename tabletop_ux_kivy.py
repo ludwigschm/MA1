@@ -211,6 +211,9 @@ class TabletopRoot(FloatLayout):
         self.round = 1
         self.signaler = 1
         self.judge = 2
+        self.first_player = None
+        self.second_player = None
+        self.update_turn_order()
         self.phase = PH_WAIT_BOTH_START
         # Versuchsperson 1 sitzt immer unten (Spieler 1), Versuchsperson 2 oben (Spieler 2)
         self._fixed_role_mapping = {1: 1, 2: 2}
@@ -891,36 +894,54 @@ class TabletopRoot(FloatLayout):
                 self.pause_message = ''
                 self.setup_round()
                 if not self.session_finished:
-                    self.phase = PH_P1_INNER
+                    start_phase = self.phase_for_player(self.first_player, 'inner') or PH_P1_INNER
+                    self.phase = start_phase
                     self.apply_phase()
             elif self.phase == PH_SHOWDOWN:
                 self.prepare_next_round(start_immediately=True)
             else:
-                self.phase = PH_P1_INNER
+                start_phase = self.phase_for_player(self.first_player, 'inner') or PH_P1_INNER
+                self.phase = start_phase
                 self.apply_phase()
 
     def tap_card(self, who:int, which:str):
         # which in {'inner','outer'}
-        if who == 1 and which == 'inner' and self.phase == PH_P1_INNER:
-            self.p1_inner.flip()
-            self.record_action(1, 'Karte innen aufgedeckt')
-            self.log_event(1, 'reveal_inner', {'card': 1})
-            Clock.schedule_once(lambda *_: self.goto(PH_P2_INNER), 0.2)
-        elif who == 2 and which == 'inner' and self.phase == PH_P2_INNER:
-            self.p2_inner.flip()
-            self.record_action(2, 'Karte innen aufgedeckt')
-            self.log_event(2, 'reveal_inner', {'card': 1})
-            Clock.schedule_once(lambda *_: self.goto(PH_P1_OUTER), 0.2)
-        elif who == 1 and which == 'outer' and self.phase == PH_P1_OUTER:
-            self.p1_outer.flip()
-            self.record_action(1, 'Karte außen aufgedeckt')
-            self.log_event(1, 'reveal_outer', {'card': 2})
-            Clock.schedule_once(lambda *_: self.goto(PH_P2_OUTER), 0.2)
-        elif who == 2 and which == 'outer' and self.phase == PH_P2_OUTER:
-            self.p2_outer.flip()
-            self.record_action(2, 'Karte außen aufgedeckt')
-            self.log_event(2, 'reveal_outer', {'card': 2})
-            Clock.schedule_once(lambda *_: self.goto(PH_SIGNALER), 0.2)
+        if which not in {'inner', 'outer'}:
+            return
+
+        expected_phase = self.phase_for_player(who, which)
+        if expected_phase is None or self.phase != expected_phase:
+            return
+
+        widget = self.card_widget_for_player(who, which)
+        if not widget:
+            return
+
+        widget.flip()
+
+        if which == 'inner':
+            self.record_action(who, 'Karte innen aufgedeckt')
+            self.log_event(who, 'reveal_inner', {'card': 1})
+        else:
+            self.record_action(who, 'Karte außen aufgedeckt')
+            self.log_event(who, 'reveal_outer', {'card': 2})
+
+        first = self.first_player
+        second = self.second_player
+
+        if which == 'inner':
+            if who == first:
+                next_phase = self.phase_for_player(second, 'inner')
+            else:
+                next_phase = self.phase_for_player(first, 'outer')
+        else:
+            if who == first:
+                next_phase = self.phase_for_player(second, 'outer')
+            else:
+                next_phase = PH_SIGNALER
+
+        if next_phase:
+            Clock.schedule_once(lambda *_: self.goto(next_phase), 0.2)
 
     def pick_signal(self, player:int, level:str):
         if self.phase != PH_SIGNALER or player != self.signaler:
@@ -960,12 +981,14 @@ class TabletopRoot(FloatLayout):
     def prepare_next_round(self, start_immediately: bool = False):
         # Rollen tauschen
         self.signaler, self.judge = self.judge, self.signaler
+        self.update_turn_order()
         self.update_role_assignments()
         self.advance_round_pointer()
         self.phase = PH_WAIT_BOTH_START
         self.setup_round()
         if start_immediately and not self.in_block_pause and not self.session_finished:
-            self.phase = PH_P1_INNER
+            start_phase = self.phase_for_player(self.first_player, 'inner') or PH_P1_INNER
+            self.phase = start_phase
         else:
             self.phase = PH_WAIT_BOTH_START
         self.apply_phase()
@@ -1315,6 +1338,35 @@ class TabletopRoot(FloatLayout):
         # Rollenwechsel (Signaler/Judge) wird separat über self.signaler/self.judge abgebildet.
         self.role_by_physical = self._fixed_role_mapping.copy()
         self.physical_by_role = {role: player for player, role in self.role_by_physical.items()}
+
+    def update_turn_order(self):
+        self.first_player = self.signaler if self.signaler in (1, 2) else 1
+        if self.judge in (1, 2) and self.judge != self.first_player:
+            self.second_player = self.judge
+        else:
+            self.second_player = 2 if self.first_player == 1 else 1
+
+    def phase_for_player(self, player: int, which: str):
+        if player not in (1, 2):
+            return None
+        if which == 'inner':
+            return PH_P1_INNER if player == 1 else PH_P2_INNER
+        if which == 'outer':
+            return PH_P1_OUTER if player == 1 else PH_P2_OUTER
+        return None
+
+    def card_widget_for_player(self, player: int, which: str):
+        if player == 1:
+            if which == 'inner':
+                return self.p1_inner
+            if which == 'outer':
+                return self.p1_outer
+        elif player == 2:
+            if which == 'inner':
+                return self.p2_inner
+            if which == 'outer':
+                return self.p2_outer
+        return None
 
     def current_engine_phase(self):
         mapping = {
