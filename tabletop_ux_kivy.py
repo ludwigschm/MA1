@@ -28,6 +28,7 @@ import os
 import csv
 import itertools
 from pathlib import Path
+from datetime import datetime
 
 from game_engine import EventLogger, Phase as EnginePhase
 
@@ -219,6 +220,9 @@ class TabletopRoot(FloatLayout):
         self.log_dir = Path(ROOT) / 'logs'
         self.session_popup = None
         self.session_configured = False
+        self.round_log_path = None
+        self.round_log_fp = None
+        self.round_log_writer = None
 
         # --- UI Elemente platzieren
         self.make_ui()
@@ -348,6 +352,7 @@ class TabletopRoot(FloatLayout):
             halign='center',
             valign='middle'
         )
+        self.round_badge.opacity = 0
         self.add_widget(self.round_badge)
 
         # interne States
@@ -367,6 +372,7 @@ class TabletopRoot(FloatLayout):
         self.card_cycle = itertools.cycle(['7.png', '8.png', '9.png', '10.png', '11.png'])
 
         self.blocks = self.load_blocks()
+        self.total_rounds_planned = sum(len(block['rounds']) for block in self.blocks)
         self.current_block_idx = 0
         self.current_round_idx = 0
         self.current_block_info = None
@@ -377,6 +383,7 @@ class TabletopRoot(FloatLayout):
         self.current_round_has_stake = False
         self.score_state = None
         self.score_state_block = None
+        self.score_state_round_start = None
         self.outcome_score_applied = False
 
         self.update_layout()
@@ -727,29 +734,8 @@ class TabletopRoot(FloatLayout):
             self.btn_start_p2.set_live(True)
             self.update_showdown()
 
-        # Badge unten
-        badge_parts = [f"Runde {self.round}"]
-        if self.current_block_info:
-            total_rounds = max(1, len(self.current_block_info['rounds']))
-            badge_parts.append(
-                f"Block {self.current_block_info['index']} Runde {self.round_in_block}/{total_rounds}"
-            )
-        elif self.session_finished:
-            badge_parts.append('Experiment beendet')
-        elif self.in_block_pause and self.current_block_idx < len(self.blocks):
-            next_block = self.blocks[self.current_block_idx]
-            badge_parts.append(f"Pause vor Block {next_block['index']}")
-
-        role_txt = (
-            f"VP1: Spieler {self.role_by_physical[1]}"
-            f" · VP2: Spieler {self.role_by_physical[2]}"
-        )
-        phase_txt = (
-            f"P{self.signaler}: Signal · P{self.judge}: Judge"
-        )
-        badge_parts.append(role_txt)
-        badge_parts.append(phase_txt)
-        self.round_badge.text = " · ".join(part for part in badge_parts if part)
+        # Badge unten ist deaktiviert
+        self.round_badge.text = ''
         self.update_info_labels()
 
     def start_pressed(self, who:int):
@@ -874,6 +860,9 @@ class TabletopRoot(FloatLayout):
             if not block['payout']:
                 self.score_state = None
                 self.score_state_block = None
+            self.score_state_round_start = (
+                self.score_state.copy() if self.score_state else None
+            )
             self.set_cards_from_plan(plan)
             self.round = self.compute_global_round()
         else:
@@ -884,6 +873,9 @@ class TabletopRoot(FloatLayout):
             self.current_round_has_stake = False
             self.set_cards_from_plan(None)
             self.round = self.compute_global_round()
+            self.score_state_round_start = (
+                self.score_state.copy() if self.score_state else None
+            )
 
         for c in (self.p1_inner, self.p1_outer, self.p2_inner, self.p2_outer):
             c.reset()
@@ -940,10 +932,12 @@ class TabletopRoot(FloatLayout):
         ):
             winner = outcome.get('winner') if outcome else None
             if winner in (1, 2):
-                loser = 1 if winner == 2 else 2
-                self.score_state[winner] += 1
-                self.score_state[loser] -= 1
-                self.outcome_score_applied = True
+                winner_role = self.role_by_physical.get(winner)
+                if winner_role in (1, 2):
+                    loser_role = 1 if winner_role == 2 else 2
+                    self.score_state[winner_role] += 1
+                    self.score_state[loser_role] -= 1
+                    self.outcome_score_applied = True
         self.update_info_labels()
         if self.session_configured:
             self.log_event(None, 'showdown', outcome or {})
@@ -1006,26 +1000,10 @@ class TabletopRoot(FloatLayout):
         }
         return self.last_outcome
 
-    def describe_player_choice(self, player: int) -> str:
-        signal = self.player_signals.get(player)
-        decision = self.player_decisions.get(player)
-        if signal:
-            return self.describe_level(signal)
-        if decision:
-            mapping = {'wahr': 'WAHR', 'bluff': 'BLUFF'}
-            return mapping.get(decision, decision.upper())
-        return '-'
-
-    def result_text(self, player: int) -> str:
-        winner = self.last_outcome.get('winner') if self.last_outcome else None
-        if winner is None:
-            return '-'
-        payout = self.last_outcome.get('payout') if self.last_outcome else False
-        if winner == player:
-            return 'Gewonnen (+1)' if payout else 'Gewonnen'
-        return 'Verloren (-1)' if payout else 'Verloren'
-
     def update_info_labels(self):
+        for lbl in self.info_labels.values():
+            lbl.text = ''
+
         if not self.session_configured:
             msg = 'Bitte Sessionnummer eingeben, um zu starten.'
             self.info_labels['bottom'].text = msg
@@ -1034,64 +1012,156 @@ class TabletopRoot(FloatLayout):
                 lbl.text = ''
             return
 
-        score_line = self.score_line_text()
-
         if self.session_finished:
             message = self.pause_message or 'Experiment beendet. Vielen Dank!'
-            combined = f"{message}\n{score_line}" if score_line else message
-            self.info_labels['bottom'].text = combined
-            self.info_labels['top'].text = combined
+            self.info_labels['bottom'].text = message
+            self.info_labels['top'].text = message
             self._update_outcome_labels()
             return
 
         if self.in_block_pause:
             message = self.pause_message or 'Pause. Drückt Play, um fortzufahren.'
-            combined = f"{message}\n{score_line}" if score_line else message
-            self.info_labels['bottom'].text = combined
-            self.info_labels['top'].text = combined
+            self.info_labels['bottom'].text = message
+            self.info_labels['top'].text = message
             self._update_outcome_labels()
             return
 
         self.compute_outcome()
-        for player in (1, 2):
-            label_key = 'bottom' if player == 1 else 'top'
-            role_number = self.role_by_physical[player]
-            header = f'Versuchsperson {player} - Spieler {role_number}'
-            own_choice = self.describe_player_choice(player)
-            other_player = 2 if player == 1 else 1
-            other_choice = self.describe_player_choice(other_player)
-            result_line = self.result_text(player)
-            if role_number == 1:
-                lines = [
-                    header,
-                    score_line,
-                    f'Eigene Wahl: {own_choice}',
-                    f'Andere Wahl: {other_choice}',
-                    f'Gewonnen / Verloren: {result_line}',
-                ]
-            else:
-                lines = [
-                    header,
-                    score_line,
-                    f'Andere Wahl: {other_choice}',
-                    f'Eigene Wahl: {own_choice}',
-                    f'Gewonnen oder Verloren: {result_line}',
-                ]
-            self.info_labels[label_key].text = "\n".join(lines)
+        total_rounds = self.total_rounds_planned or 0
+        for vp in (1, 2):
+            physical = self.physical_by_role.get(vp)
+            if physical not in (1, 2):
+                continue
+            label_key = 'bottom' if physical == 1 else 'top'
+            label = self.info_labels[label_key]
+            lines = []
+            lines.append(self.format_round_header(vp, physical, total_rounds))
+            score_line = self.format_score_line(vp)
+            if score_line:
+                lines.append(score_line)
+            own_choice, other_choice = self.choice_texts_for_vp(vp)
+            if own_choice:
+                lines.append(f'Eigene Wahl: {own_choice}')
+            if other_choice:
+                lines.append(f'Andere Wahl: {other_choice}')
+            outcome_line = self.outcome_summary_text()
+            if outcome_line:
+                lines.append(outcome_line)
+            result_line = self.result_line_for_vp(vp)
+            if result_line:
+                lines.append(result_line)
+            label.text = "\n".join(lines)
+
         self._update_outcome_labels()
 
     def _update_outcome_labels(self):
         for label in self.outcome_labels.values():
             label.text = ''
 
-    def describe_level(self, level:str) -> str:
+    def format_round_header(self, vp: int, physical: int, total_rounds: int) -> str:
+        if total_rounds:
+            round_part = f'Runde {self.round}/{total_rounds}'
+        else:
+            round_part = f'Runde {self.round}'
+        return f'{round_part} | Versuchsperson {vp}: Spieler {physical}'
+
+    def format_score_line(self, vp: int) -> str:
+        if not (self.current_round_has_stake and self.score_state_round_start):
+            return ''
+        start_score = self.score_state_round_start.get(vp)
+        if start_score is None:
+            return ''
+        if self.outcome_score_applied and self.score_state:
+            end_score = self.score_state.get(vp, start_score)
+            delta = end_score - start_score
+            if delta > 0:
+                return f'Punkte: {start_score} +{delta}'
+            if delta < 0:
+                return f'Punkte: {start_score} - {abs(delta)}'
+        return f'Punkte: {start_score}'
+
+    def format_signal_choice(self, level: str):
         mapping = {
             'low': 'Tief',
             'mid': 'Mittel',
             'high': 'Hoch',
-            None: '-',
         }
-        return mapping.get(level, level)
+        return mapping.get(level)
+
+    def format_decision_choice(self, decision: str):
+        mapping = {
+            'wahr': 'Wahrheit',
+            'bluff': 'Bluff',
+        }
+        return mapping.get(decision)
+
+    def choice_texts_for_vp(self, vp: int):
+        physical = self.physical_by_role.get(vp)
+        if physical not in (1, 2):
+            return (None, None)
+        other_vp = 2 if vp == 1 else 1
+        other_physical = self.physical_by_role.get(other_vp)
+        own_choice = None
+        other_choice = None
+        if physical == self.signaler:
+            own_choice = self.format_signal_choice(self.player_signals.get(physical))
+            if other_physical:
+                other_choice = self.format_decision_choice(
+                    self.player_decisions.get(other_physical)
+                )
+        else:
+            own_choice = self.format_decision_choice(self.player_decisions.get(physical))
+            if other_physical:
+                other_choice = self.format_signal_choice(
+                    self.player_signals.get(other_physical)
+                )
+        return own_choice, other_choice
+
+    def outcome_summary_text(self) -> str:
+        if not self.last_outcome:
+            return ''
+        truthful = self.last_outcome.get('truthful')
+        judge_choice = self.last_outcome.get('judge_choice')
+        if truthful is None or not judge_choice:
+            return ''
+        truth_txt = 'Wahres Signal' if truthful else 'Bluff-Signal'
+        judge_mapping = {
+            'wahr': 'Wahrheit angenommen',
+            'bluff': 'Bluff angenommen',
+        }
+        judge_txt = judge_mapping.get(judge_choice, '')
+        if truth_txt and judge_txt:
+            return f'{truth_txt} - {judge_txt}'
+        return truth_txt or judge_txt
+
+    def result_line_for_vp(self, vp: int) -> str:
+        if not self.last_outcome:
+            return ''
+        winner_physical = self.last_outcome.get('winner')
+        if winner_physical not in (1, 2):
+            return ''
+        winner_vp = self.role_by_physical.get(winner_physical)
+        if winner_vp not in (1, 2):
+            return ''
+        payout = self.last_outcome.get('payout')
+        base = 'Gewonnen' if winner_vp == vp else 'Verloren'
+        if not payout:
+            return base
+        if not (self.score_state_round_start and self.score_state):
+            return base
+        start_score = self.score_state_round_start.get(vp)
+        end_score = self.score_state.get(vp)
+        if start_score is None or end_score is None:
+            return base
+        delta = end_score - start_score
+        if delta > 0:
+            return f'{base} +{delta}'
+        if delta < 0:
+            return f'{base} - {abs(delta)}'
+        return base
+
+    def describe_level(self, level:str) -> str:
+        return self.format_signal_choice(level) or (level or '-')
 
     def update_role_assignments(self):
         if self.signaler == 1:
@@ -1131,6 +1201,127 @@ class TabletopRoot(FloatLayout):
             action,
             payload
         )
+        self.write_round_log(actor, action, payload, player)
+
+    def init_round_log(self):
+        if not self.session_id:
+            return
+        if self.round_log_fp:
+            self.close_round_log()
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        path = self.log_dir / f'round_log_{self.session_id}.csv'
+        new_file = not path.exists()
+        self.round_log_path = path
+        self.round_log_fp = open(path, 'a', encoding='utf-8', newline='')
+        self.round_log_writer = csv.writer(self.round_log_fp)
+        if new_file:
+            header = [
+                'Bedingung',
+                'Runde',
+                'Runde im Block',
+                'Spieler',
+                'VP',
+                'Karte1 VP1',
+                'Karte2 VP1',
+                'Karte1 VP2',
+                'Karte2 VP2',
+                'Aktion',
+                'Zeit',
+                'Gewinner',
+                'Punktestand VP1',
+                'Punktestand VP2',
+            ]
+            self.round_log_writer.writerow(header)
+            self.round_log_fp.flush()
+
+    def round_log_action_label(self, action: str, payload: dict) -> str:
+        if action in ('start_click', 'round_start'):
+            return 'Start'
+        if action == 'next_round_click':
+            return 'Nächste Runde'
+        if action == 'reveal_inner':
+            return 'Karte 1'
+        if action == 'reveal_outer':
+            return 'Karte 2'
+        if action == 'signal_choice':
+            return self.format_signal_choice(payload.get('level')) or 'Signal'
+        if action == 'call_choice':
+            return self.format_decision_choice(payload.get('decision')) or 'Entscheidung'
+        if action == 'showdown':
+            return 'Showdown'
+        if action == 'session_start':
+            return 'Session'
+        return action
+
+    def write_round_log(self, actor: str, action: str, payload: dict, player: int):
+        if not self.round_log_writer:
+            return
+        block_label = ''
+        round_in_block = ''
+        if self.current_block_info:
+            condition = 'pay' if self.current_round_has_stake else 'no_pay'
+            block_label = f"{self.current_block_info['index']} {condition}"
+            round_in_block = self.round_in_block
+        plan = None
+        plan_info = self.get_current_plan()
+        if plan_info:
+            plan = plan_info[1]
+        vp1_cards = plan['vp1'] if plan else (None, None)
+        vp2_cards = plan['vp2'] if plan else (None, None)
+        if not vp1_cards:
+            vp1_cards = (None, None)
+        if not vp2_cards:
+            vp2_cards = (None, None)
+        actor_player = player if player in (1, 2) else ''
+        actor_vp = ''
+        if player in (1, 2):
+            vp_num = self.role_by_physical.get(player)
+            if vp_num in (1, 2):
+                actor_vp = f'VP{vp_num}'
+        action_label = self.round_log_action_label(action, payload)
+        timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+        winner_label = ''
+        if self.last_outcome and self.last_outcome.get('winner') in (1, 2):
+            winner_vp = self.role_by_physical.get(self.last_outcome.get('winner'))
+            if winner_vp in (1, 2):
+                winner_label = f'VP{winner_vp}'
+        if self.score_state:
+            score_vp1 = self.score_state.get(1, '')
+            score_vp2 = self.score_state.get(2, '')
+        elif self.score_state_round_start:
+            score_vp1 = self.score_state_round_start.get(1, '')
+            score_vp2 = self.score_state_round_start.get(2, '')
+        else:
+            score_vp1 = ''
+            score_vp2 = ''
+        def _card_value(val):
+            return '' if val is None else val
+
+        row = [
+            block_label,
+            self.round,
+            round_in_block,
+            actor_player,
+            actor_vp,
+            _card_value(vp1_cards[0]) if vp1_cards else '',
+            _card_value(vp1_cards[1]) if vp1_cards else '',
+            _card_value(vp2_cards[0]) if vp2_cards else '',
+            _card_value(vp2_cards[1]) if vp2_cards else '',
+            action_label,
+            timestamp,
+            winner_label,
+            score_vp1,
+            score_vp2,
+        ]
+        self.round_log_writer.writerow(row)
+        self.round_log_fp.flush()
+
+    def close_round_log(self):
+        if self.round_log_fp:
+            self.round_log_fp.close()
+            self.round_log_fp = None
+            self.round_log_writer = None
+
 
     def prompt_session_number(self):
         if self.session_popup:
@@ -1198,6 +1389,7 @@ class TabletopRoot(FloatLayout):
         self.log_dir.mkdir(parents=True, exist_ok=True)
         db_path = self.log_dir / f'events_{self.session_id}.sqlite3'
         self.logger = EventLogger(str(db_path))
+        self.init_round_log()
         self.update_role_assignments()
         if self.session_popup:
             self.session_popup.dismiss()
@@ -1243,6 +1435,8 @@ class TabletopApp(App):
         root = self.root
         if root and root.logger:
             root.logger.close()
+        if root:
+            root.close_round_log()
 
 if __name__ == '__main__':
     TabletopApp().run()
