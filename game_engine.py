@@ -411,6 +411,8 @@ class GameEngine:
         self._ensure([Phase.SIGNAL_WAIT])
         if self.current.p1_signal is not None:
             raise RuntimeError("Signal bereits gesetzt.")
+        if level == SignalLevel.UEBERSPIEL:
+            raise ValueError("Das Signal 'überspiel' kann nicht aktiv gewählt werden.")
         self.current.p1_signal = level
         self._log("P1", "signal", {"level": level.value})
         self.current.phase = Phase.CALL_WAIT
