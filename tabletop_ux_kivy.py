@@ -27,6 +27,8 @@ import itertools
 
 # --- Display fest auf 3840x2160, Vollbild aktivierbar (kommentiere die nächste Zeile, falls du Fenster willst)
 Config.set('graphics', 'fullscreen', 'auto')
+Config.set('graphics', 'width', '3840')
+Config.set('graphics', 'height', '2160')
 Window.size = (3840, 2160)
 
 # --- Konstanten & Assets
@@ -75,6 +77,7 @@ class CardWidget(Button):
         self.background_normal = ASSETS['cards']['back_stop']
         self.background_down = ASSETS['cards']['back_stop']
         self.background_disabled_normal = ASSETS['cards']['back_stop']
+        self.background_disabled_down = ASSETS['cards']['back_stop']
         self.disabled_color = (1,1,1,1)
         self.update_visual()
 
@@ -110,6 +113,8 @@ class CardWidget(Button):
             img = ASSETS['cards']['back_stop']
         self.background_normal = img
         self.background_down = img
+        self.background_disabled_normal = img
+        self.background_disabled_down = img
         self.opacity = 1.0 if (self.live or self.face_up) else 0.55
 
 class IconButton(Button):
@@ -176,31 +181,49 @@ class TabletopRoot(FloatLayout):
     def make_ui(self):
         W, H = Window.size
 
+        card_size = (420, 640)
+        card_gap = 70
+        corner_margin = 120
+        start_size = (360, 360)
+
         # Start-Buttons links/rechts (für beide Spieler)
-        self.btn_start_p1 = IconButton(ASSETS['play'], size_hint=(None,None), size=(300,300), pos=(60, H/2-150))
+        self.btn_start_p1 = IconButton(
+            ASSETS['play'],
+            size_hint=(None, None),
+            size=start_size,
+            pos=(corner_margin, H/2 - start_size[1]/2)
+        )
         self.btn_start_p1.bind(on_release=lambda *_: self.start_pressed(1))
         self.add_widget(self.btn_start_p1)
 
-        self.btn_start_p2 = IconButton(ASSETS['play'], size_hint=(None,None), size=(300,300), pos=(W-360, H/2-150))
+        self.btn_start_p2 = IconButton(
+            ASSETS['play'],
+            size_hint=(None, None),
+            size=start_size,
+            pos=(W - corner_margin - start_size[0], H/2 - start_size[1]/2)
+        )
         self.btn_start_p2.bind(on_release=lambda *_: self.start_pressed(2))
         self.add_widget(self.btn_start_p2)
 
-        # Spielerzonen (je 2 Karten, links ausgerichtet)
-        # Spieler 1 unten
-        self.p1_outer = CardWidget(size_hint=(None,None), size=(320,480), pos=(220, 140))
+        # Spielerzonen (je 2 Karten in den Ecken)
+        p1_outer_pos = (corner_margin, corner_margin)
+        p1_inner_pos = (corner_margin + card_size[0] + card_gap, corner_margin)
+        p2_outer_pos = (W - corner_margin - card_size[0], H - corner_margin - card_size[1])
+        p2_inner_pos = (p2_outer_pos[0] - card_size[0] - card_gap, p2_outer_pos[1])
+
+        self.p1_outer = CardWidget(size_hint=(None, None), size=card_size, pos=p1_outer_pos)
         self.p1_outer.bind(on_release=lambda *_: self.tap_card(1, 'outer'))
         self.add_widget(self.p1_outer)
 
-        self.p1_inner = CardWidget(size_hint=(None,None), size=(320,480), pos=(560, 140))
+        self.p1_inner = CardWidget(size_hint=(None, None), size=card_size, pos=p1_inner_pos)
         self.p1_inner.bind(on_release=lambda *_: self.tap_card(1, 'inner'))
         self.add_widget(self.p1_inner)
 
-        # Spieler 2 oben (gespiegelt in Position, aber gleiche Grafiken)
-        self.p2_outer = CardWidget(size_hint=(None,None), size=(320,480), pos=(Window.size[0]-220-320-340, H-140-480))
+        self.p2_outer = CardWidget(size_hint=(None, None), size=card_size, pos=p2_outer_pos)
         self.p2_outer.bind(on_release=lambda *_: self.tap_card(2, 'outer'))
         self.add_widget(self.p2_outer)
 
-        self.p2_inner = CardWidget(size_hint=(None,None), size=(320,480), pos=(Window.size[0]-220-320, H-140-480))
+        self.p2_inner = CardWidget(size_hint=(None, None), size=card_size, pos=p2_inner_pos)
         self.p2_inner.bind(on_release=lambda *_: self.tap_card(2, 'inner'))
         self.add_widget(self.p2_inner)
 
@@ -208,61 +231,92 @@ class TabletopRoot(FloatLayout):
         self.signal_buttons = {1: {}, 2: {}}
         self.decision_buttons = {1: {}, 2: {}}
 
-        # Signale Spieler 1 (unten Mitte)
-        sig_positions_p1 = [(W/2-420, 60), (W/2-130, 60), (W/2+160, 60)]
-        for level, pos in zip(['low','mid','high'], sig_positions_p1):
-            btn = IconButton(ASSETS['signal'][level], size_hint=(None,None), size=(260,260), pos=pos)
+        btn_size = (260, 260)
+        horizontal_gap = 80
+        row_gap = 70
+
+        def row_positions(count: int, base_y: float):
+            row_width = count * btn_size[0] + (count - 1) * horizontal_gap
+            start_x = W/2 - row_width / 2
+            return [(start_x + i * (btn_size[0] + horizontal_gap), base_y) for i in range(count)]
+
+        # Signale Spieler 1 (untere Reihe im Block)
+        p1_signal_y = 560
+        for level, pos in zip(['low', 'mid', 'high'], row_positions(3, p1_signal_y)):
+            btn = IconButton(ASSETS['signal'][level], size_hint=(None, None), size=btn_size, pos=pos)
             btn.bind(on_release=lambda _, lvl=level: self.pick_signal(1, lvl))
             self.signal_buttons[1][level] = btn
             self.add_widget(btn)
 
-        # Signale Spieler 2 (oben Mitte)
-        sig_positions_p2 = [(W/2-420, H-60-260), (W/2-130, H-60-260), (W/2+160, H-60-260)]
-        for level, pos in zip(['low','mid','high'], sig_positions_p2):
-            btn = IconButton(ASSETS['signal'][level], size_hint=(None,None), size=(260,260), pos=pos)
-            btn.bind(on_release=lambda _, lvl=level: self.pick_signal(2, lvl))
-            self.signal_buttons[2][level] = btn
-            self.add_widget(btn)
-
-        # Entscheidungen Spieler 1 (unten links vom Zentrum)
-        dec_positions_p1 = [(W/2-420, 360), (W/2-130, 360)]
-        for choice, pos in zip(['bluff','wahr'], dec_positions_p1):
-            btn = IconButton(ASSETS['decide'][choice], size_hint=(None,None), size=(260,260), pos=pos)
+        # Entscheidungen Spieler 1 (untere Blockreihe)
+        p1_decision_y = p1_signal_y - btn_size[1] - row_gap
+        for choice, pos in zip(['bluff', 'wahr'], row_positions(2, p1_decision_y)):
+            btn = IconButton(ASSETS['decide'][choice], size_hint=(None, None), size=btn_size, pos=pos)
             btn.bind(on_release=lambda _, ch=choice: self.pick_decision(1, ch))
             self.decision_buttons[1][choice] = btn
             self.add_widget(btn)
 
-        # Entscheidungen Spieler 2 (oben links vom Zentrum)
-        dec_positions_p2 = [(W/2+160, H-360-260), (W/2+450, H-360-260)]
-        for choice, pos in zip(['bluff','wahr'], dec_positions_p2):
-            btn = IconButton(ASSETS['decide'][choice], size_hint=(None,None), size=(260,260), pos=pos)
+        # Signale Spieler 2 (obere Blockreihe – gespiegelt)
+        p2_signal_y = H - p1_signal_y - btn_size[1]
+        for level, pos in zip(['low', 'mid', 'high'], row_positions(3, p2_signal_y)):
+            btn = IconButton(ASSETS['signal'][level], size_hint=(None, None), size=btn_size, pos=pos)
+            btn.bind(on_release=lambda _, lvl=level: self.pick_signal(2, lvl))
+            self.signal_buttons[2][level] = btn
+            self.add_widget(btn)
+
+        # Entscheidungen Spieler 2 (obere Blockreihe über den Signalen)
+        p2_decision_y = p2_signal_y + btn_size[1] + row_gap
+        for choice, pos in zip(['bluff', 'wahr'], row_positions(2, p2_decision_y)):
+            btn = IconButton(ASSETS['decide'][choice], size_hint=(None, None), size=btn_size, pos=pos)
             btn.bind(on_release=lambda _, ch=choice: self.pick_decision(2, ch))
             self.decision_buttons[2][choice] = btn
             self.add_widget(btn)
 
-        # Showdown-Karten in der Mitte
+        # Showdown-Karten in der Mitte (immer sichtbar, zuerst verdeckt)
+        center_gap_x = 90
+        center_gap_y = 60
+        center_card_size = (380, 560)
+        left_x = W/2 - center_card_size[0] - center_gap_x / 2
+        right_x = W/2 + center_gap_x / 2
+        bottom_y = H/2 - center_card_size[1] - center_gap_y / 2
+        top_y = H/2 + center_gap_y / 2
+
         self.center_cards = {
-            1: [Image(size_hint=(None,None), size=(320,480), pos=(W/2-360, H/2-260), opacity=0),
-                Image(size_hint=(None,None), size=(320,480), pos=(W/2+40,  H/2-260), opacity=0)],
-            2: [Image(size_hint=(None,None), size=(320,480), pos=(W/2-360, H/2+60), opacity=0),
-                Image(size_hint=(None,None), size=(320,480), pos=(W/2+40,  H/2+60), opacity=0)],
+            1: [Image(size_hint=(None, None), size=center_card_size, pos=(left_x, bottom_y), allow_stretch=True, keep_ratio=True),
+                Image(size_hint=(None, None), size=center_card_size, pos=(right_x, bottom_y), allow_stretch=True, keep_ratio=True)],
+            2: [Image(size_hint=(None, None), size=center_card_size, pos=(left_x, top_y), allow_stretch=True, keep_ratio=True),
+                Image(size_hint=(None, None), size=center_card_size, pos=(right_x, top_y), allow_stretch=True, keep_ratio=True)],
         }
         for imgs in self.center_cards.values():
             for img in imgs:
                 self.add_widget(img)
 
         # Showdown-Label (Mitte)
-        self.showdown_label = Label(text='', font_size=56, color=(1,1,1,1), size_hint=(None,None), size=(1200,180), pos=(W/2-600, H/2-120))
+        self.showdown_label = Label(
+            text='',
+            font_size=64,
+            color=(1, 1, 1, 1),
+            size_hint=(None, None),
+            size=(1600, 220),
+            pos=(W/2 - 800, H/2 - 110)
+        )
         self.add_widget(self.showdown_label)
 
         # Rundenbadge unten Mitte
-        self.round_badge = Label(text='', font_size=36, color=(1,1,1,1), size_hint=(None,None), size=(1200,60), pos=(W/2-600, 10))
+        self.round_badge = Label(
+            text='',
+            font_size=40,
+            color=(1, 1, 1, 1),
+            size_hint=(None, None),
+            size=(1400, 70),
+            pos=(W/2 - 700, 30)
+        )
         self.add_widget(self.round_badge)
 
         # Statusanzeigen
         self.status_labels = {
-            1: Label(text='', font_size=40, color=(1,1,1,1), size_hint=(None,None), size=(900,240), pos=(80, 40)),
-            2: Label(text='', font_size=40, color=(1,1,1,1), size_hint=(None,None), size=(900,240), pos=(W-980, H-280)),
+            1: Label(text='', font_size=40, color=(1, 1, 1, 1), size_hint=(None, None), size=(900, 240), pos=(corner_margin, corner_margin + card_size[1] + 60)),
+            2: Label(text='', font_size=40, color=(1, 1, 1, 1), size_hint=(None, None), size=(900, 240), pos=(W - corner_margin - 900, p2_inner_pos[1] - 280)),
         }
         for label in self.status_labels.values():
             self.add_widget(label)
@@ -290,9 +344,7 @@ class TabletopRoot(FloatLayout):
         # Showdown zurücksetzen
         if self.phase != PH_SHOWDOWN:
             self.showdown_label.text = ''
-            for imgs in self.center_cards.values():
-                for img in imgs:
-                    img.opacity = 0
+            self.refresh_center_cards(reveal=False)
 
         # Startbuttons
         start_active = (self.phase in (PH_WAIT_BOTH_START, PH_SHOWDOWN))
@@ -429,19 +481,26 @@ class TabletopRoot(FloatLayout):
         self.update_status_label(2)
         # Showdown Elements
         self.showdown_label.text = ''
-        for imgs in self.center_cards.values():
-            for img in imgs:
-                img.opacity = 0
+        self.refresh_center_cards(reveal=False)
+
+    def refresh_center_cards(self, reveal: bool):
+        if reveal:
+            sources = {
+                1: [self.p1_inner.front_image, self.p1_outer.front_image],
+                2: [self.p2_inner.front_image, self.p2_outer.front_image],
+            }
+        else:
+            back = ASSETS['cards']['back']
+            sources = {1: [back, back], 2: [back, back]}
+
+        for player, imgs in self.center_cards.items():
+            for idx, img in enumerate(imgs):
+                img.source = sources[player][idx]
+                img.opacity = 1
 
     def update_showdown(self):
         # Karten in der Mitte anzeigen
-        self.center_cards[1][0].source = self.p1_inner.front_image
-        self.center_cards[1][1].source = self.p1_outer.front_image
-        self.center_cards[2][0].source = self.p2_inner.front_image
-        self.center_cards[2][1].source = self.p2_outer.front_image
-        for imgs in self.center_cards.values():
-            for img in imgs:
-                img.opacity = 1
+        self.refresh_center_cards(reveal=True)
         signaler = self.signaler
         judge = self.judge
         signal_choice = self.player_signals[signaler]
