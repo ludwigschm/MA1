@@ -22,8 +22,13 @@ from kivy.uix.widget import Widget
 from kivy.uix.button import Button
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.label import Label
+from kivy.uix.popup import Popup
+from kivy.uix.textinput import TextInput
 import os
 import itertools
+from pathlib import Path
+
+from game_engine import EventLogger, Phase as EnginePhase
 
 # --- Display fest auf 3840x2160, Vollbild aktivierbar (kommentiere die nächste Zeile, falls du Fenster willst)
 Config.set('graphics', 'fullscreen', 'auto')
@@ -205,11 +210,20 @@ class TabletopRoot(FloatLayout):
         self.signaler = 1
         self.judge = 2
         self.phase = PH_WAIT_BOTH_START
+        self.role_by_physical = {1: 1, 2: 2}
+        self.physical_by_role = {1: 1, 2: 2}
+        self.session_number = None
+        self.session_id = None
+        self.logger = None
+        self.log_dir = Path(ROOT) / 'logs'
+        self.session_popup = None
+        self.session_configured = False
 
         # --- UI Elemente platzieren
         self.make_ui()
         self.setup_round()
         self.apply_phase()
+        Clock.schedule_once(lambda *_: self.prompt_session_number(), 0.1)
 
     # --- Layout & Elemente
     def on_resize(self, *_):
@@ -525,11 +539,14 @@ class TabletopRoot(FloatLayout):
 
         # Startbuttons
         start_active = (self.phase in (PH_WAIT_BOTH_START, PH_SHOWDOWN))
-        self.btn_start_p1.set_live(start_active)
-        self.btn_start_p2.set_live(start_active)
+        ready = self.session_configured
+        self.btn_start_p1.set_live(start_active and ready)
+        self.btn_start_p2.set_live(start_active and ready)
 
         # Phasen-spezifisch
-        if self.phase == PH_P1_INNER:
+        if not ready:
+            pass
+        elif self.phase == PH_P1_INNER:
             self.p1_inner.set_live(True)
         elif self.phase == PH_P2_INNER:
             self.p2_inner.set_live(True)
@@ -551,8 +568,14 @@ class TabletopRoot(FloatLayout):
             self.update_showdown()
 
         # Badge unten
-        role_txt = f"P1: {'Signal' if self.signaler==1 else 'Judge'} · P2: {'Signal' if self.signaler==2 else 'Judge'}"
-        self.round_badge.text = f"Runde {self.round} · {role_txt}"
+        role_txt = (
+            f"VP1: Spieler {self.role_by_physical[1]}"
+            f" · VP2: Spieler {self.role_by_physical[2]}"
+        )
+        phase_txt = (
+            f"P{self.signaler}: Signal · P{self.judge}: Judge"
+        )
+        self.round_badge.text = f"Runde {self.round} · {role_txt} · {phase_txt}"
         self.update_info_labels()
 
     def start_pressed(self, who:int):
@@ -563,6 +586,9 @@ class TabletopRoot(FloatLayout):
         else:
             self.p2_pressed = True
         self.record_action(who, 'Play gedrückt')
+        if self.session_configured:
+            action = 'start_click' if self.phase == PH_WAIT_BOTH_START else 'next_round_click'
+            self.log_event(who, action)
         if self.p1_pressed and self.p2_pressed:
             # in nächste Phase
             self.p1_pressed = False
@@ -578,18 +604,22 @@ class TabletopRoot(FloatLayout):
         if who == 1 and which == 'inner' and self.phase == PH_P1_INNER:
             self.p1_inner.flip()
             self.record_action(1, 'Karte innen aufgedeckt')
+            self.log_event(1, 'reveal_inner', {'card': 1})
             Clock.schedule_once(lambda *_: self.goto(PH_P2_INNER), 0.2)
         elif who == 2 and which == 'inner' and self.phase == PH_P2_INNER:
             self.p2_inner.flip()
             self.record_action(2, 'Karte innen aufgedeckt')
+            self.log_event(2, 'reveal_inner', {'card': 1})
             Clock.schedule_once(lambda *_: self.goto(PH_P1_OUTER), 0.2)
         elif who == 1 and which == 'outer' and self.phase == PH_P1_OUTER:
             self.p1_outer.flip()
             self.record_action(1, 'Karte außen aufgedeckt')
+            self.log_event(1, 'reveal_outer', {'card': 2})
             Clock.schedule_once(lambda *_: self.goto(PH_P2_OUTER), 0.2)
         elif who == 2 and which == 'outer' and self.phase == PH_P2_OUTER:
             self.p2_outer.flip()
             self.record_action(2, 'Karte außen aufgedeckt')
+            self.log_event(2, 'reveal_outer', {'card': 2})
             Clock.schedule_once(lambda *_: self.goto(PH_SIGNALER), 0.2)
 
     def pick_signal(self, player:int, level:str):
@@ -604,6 +634,7 @@ class TabletopRoot(FloatLayout):
                 btn.set_live(False)
                 btn.disabled = True
         self.record_action(player, f'Signal gewählt: {self.describe_level(level)}')
+        self.log_event(player, 'signal_choice', {'level': level})
         self.update_info_labels()
         Clock.schedule_once(lambda *_: self.goto(PH_JUDGE), 0.2)
 
@@ -618,6 +649,7 @@ class TabletopRoot(FloatLayout):
                 btn.set_live(False)
                 btn.disabled = True
         self.record_action(player, f'Entscheidung: {decision.upper()}')
+        self.log_event(player, 'call_choice', {'decision': decision})
         self.update_info_labels()
         Clock.schedule_once(lambda *_: self.goto(PH_SHOWDOWN), 0.2)
 
@@ -628,7 +660,9 @@ class TabletopRoot(FloatLayout):
     def prepare_next_round(self, start_immediately: bool = False):
         # Rollen tauschen
         self.signaler, self.judge = self.judge, self.signaler
+        self.update_role_assignments()
         self.round += 1
+        self.phase = PH_WAIT_BOTH_START
         self.setup_round()
         if start_immediately:
             self.phase = PH_P1_INNER
@@ -669,6 +703,7 @@ class TabletopRoot(FloatLayout):
         }
         self.refresh_center_cards(reveal=False)
         self.update_info_labels()
+        self.log_round_start()
 
     def refresh_center_cards(self, reveal: bool):
         if reveal:
@@ -690,6 +725,9 @@ class TabletopRoot(FloatLayout):
         self.refresh_center_cards(reveal=True)
         self.compute_outcome()
         self.update_info_labels()
+        if self.session_configured:
+            outcome = self.last_outcome or {}
+            self.log_event(None, 'showdown', outcome)
 
     def card_value_from_path(self, path: str):
         if not path:
@@ -767,19 +805,35 @@ class TabletopRoot(FloatLayout):
         return 'Verloren'
 
     def update_info_labels(self):
+        if not self.session_configured:
+            msg = 'Bitte Sessionnummer eingeben, um zu starten.'
+            self.info_labels['bottom'].text = msg
+            self.info_labels['top'].text = msg
+            for lbl in self.outcome_labels.values():
+                lbl.text = ''
+            return
+
         self.compute_outcome()
-        choice_p1 = self.describe_player_choice(1)
-        choice_p2 = self.describe_player_choice(2)
+        choice_role1 = self.describe_player_choice(self.physical_by_role[1])
+        choice_role2 = self.describe_player_choice(self.physical_by_role[2])
+
+        vp1_role = self.role_by_physical[1]
+        vp2_role = self.role_by_physical[2]
+        vp1_role_name = 'Signal' if self.signaler == 1 else 'Judge'
+        vp2_role_name = 'Signal' if self.signaler == 2 else 'Judge'
+
         bottom_lines = [
-            'Du bist Spieler 1',
-            f'Wahl Spieler 1: {choice_p1}',
-            f'Wahl Spieler 2: {choice_p2}',
+            f'Versuchsperson 1 – aktuell Spieler {vp1_role}',
+            f'Deine Rolle: {vp1_role_name}',
+            f'Wahl Spieler 1: {choice_role1}',
+            f'Wahl Spieler 2: {choice_role2}',
             f'Ergebnis: {self.result_text(1)}'
         ]
         top_lines = [
-            'Du bist Spieler 2',
-            f'Wahl Spieler 1: {choice_p1}',
-            f'Wahl Spieler 2: {choice_p2}',
+            f'Versuchsperson 2 – aktuell Spieler {vp2_role}',
+            f'Deine Rolle: {vp2_role_name}',
+            f'Wahl Spieler 1: {choice_role1}',
+            f'Wahl Spieler 2: {choice_role2}',
             f'Ergebnis: {self.result_text(2)}'
         ]
         self.info_labels['bottom'].text = "\n".join(bottom_lines)
@@ -787,13 +841,8 @@ class TabletopRoot(FloatLayout):
         self._update_outcome_labels()
 
     def _update_outcome_labels(self):
-        show_results = (self.phase == PH_SHOWDOWN)
-        for player, label in self.outcome_labels.items():
-            if show_results:
-                text = self.result_text(player)
-                label.text = '' if text == '-' else text
-            else:
-                label.text = ''
+        for label in self.outcome_labels.values():
+            label.text = ''
 
     def describe_level(self, level:str) -> str:
         mapping = {
@@ -803,6 +852,130 @@ class TabletopRoot(FloatLayout):
             None: '-',
         }
         return mapping.get(level, level)
+
+    def update_role_assignments(self):
+        if self.signaler == 1:
+            self.role_by_physical = {1: 1, 2: 2}
+        else:
+            self.role_by_physical = {1: 2, 2: 1}
+        self.physical_by_role = {role: player for player, role in self.role_by_physical.items()}
+
+    def current_engine_phase(self):
+        mapping = {
+            PH_WAIT_BOTH_START: EnginePhase.WAITING_START,
+            PH_P1_INNER: EnginePhase.DEALING,
+            PH_P2_INNER: EnginePhase.DEALING,
+            PH_P1_OUTER: EnginePhase.DEALING,
+            PH_P2_OUTER: EnginePhase.DEALING,
+            PH_SIGNALER: EnginePhase.SIGNAL_WAIT,
+            PH_JUDGE: EnginePhase.CALL_WAIT,
+            PH_SHOWDOWN: EnginePhase.REVEAL_SCORE,
+        }
+        return mapping.get(self.phase, EnginePhase.DEALING)
+
+    def log_event(self, player: int, action: str, payload=None):
+        if not self.logger or not self.session_configured:
+            return
+        payload = payload or {}
+        if player is None:
+            actor = 'SYS'
+        else:
+            role = self.role_by_physical.get(player)
+            actor = 'P1' if role == 1 else 'P2'
+        round_idx = max(0, self.round - 1)
+        self.logger.log(
+            self.session_id,
+            round_idx,
+            self.current_engine_phase(),
+            actor,
+            action,
+            payload
+        )
+
+    def prompt_session_number(self):
+        if self.session_popup:
+            return
+
+        layout = FloatLayout()
+        popup_width = 800
+        popup_height = 500
+
+        lbl = Label(
+            text='Bitte Sessionnummer eingeben:',
+            size_hint=(0.8, 0.2),
+            pos_hint={'center_x': 0.5, 'top': 0.95}
+        )
+        layout.add_widget(lbl)
+
+        self.session_input = TextInput(
+            multiline=False,
+            input_filter='int',
+            size_hint=(0.6, 0.2),
+            pos_hint={'center_x': 0.5, 'center_y': 0.6}
+        )
+        layout.add_widget(self.session_input)
+
+        self.session_error = Label(
+            text='',
+            color=(1, 0, 0, 1),
+            size_hint=(0.8, 0.15),
+            pos_hint={'center_x': 0.5, 'center_y': 0.4}
+        )
+        layout.add_widget(self.session_error)
+
+        btn = Button(
+            text='Start',
+            size_hint=(0.3, 0.18),
+            pos_hint={'center_x': 0.5, 'y': 0.05}
+        )
+        btn.bind(on_release=self.confirm_session_number)
+        layout.add_widget(btn)
+
+        popup = Popup(
+            title='Sessionnummer',
+            content=layout,
+            size_hint=(None, None),
+            size=(popup_width, popup_height),
+            auto_dismiss=False
+        )
+        self.session_popup = popup
+        popup.open()
+
+    def confirm_session_number(self, *_):
+        text = self.session_input.text.strip() if hasattr(self, 'session_input') else ''
+        try:
+            number = int(text)
+            if number <= 0:
+                raise ValueError
+        except ValueError:
+            if hasattr(self, 'session_error'):
+                self.session_error.text = 'Bitte eine positive Zahl eingeben.'
+            return
+
+        self.session_number = number
+        self.session_id = f'S{number:03d}'
+        self.session_configured = True
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        db_path = self.log_dir / f'events_{self.session_id}.sqlite3'
+        self.logger = EventLogger(str(db_path))
+        self.update_role_assignments()
+        if self.session_popup:
+            self.session_popup.dismiss()
+            self.session_popup = None
+        self.log_event(None, 'session_start', {'session_number': number})
+        self.log_round_start()
+        self.apply_phase()
+        self.update_info_labels()
+
+    def log_round_start(self):
+        if not self.session_configured:
+            return
+        self.log_event(None, 'round_start', {
+            'round': self.round,
+            'signaler': self.signaler,
+            'judge': self.judge,
+            'vp_roles': self.role_by_physical.copy(),
+        })
 
     def record_action(self, player:int, text:str):
         self.status_lines[player].append(text)
@@ -822,6 +995,11 @@ class TabletopApp(App):
         self.title = 'Masterarbeit – Tabletop UX'
         root = TabletopRoot()
         return root
+
+    def on_stop(self):
+        root = self.root
+        if root and root.logger:
+            root.logger.close()
 
 if __name__ == '__main__':
     TabletopApp().run()
