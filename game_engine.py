@@ -29,7 +29,6 @@ class SignalLevel(Enum):
     HOCH = "hoch"
     MITTEL = "mittel"
     TIEF = "tief"
-    UEBERSPIEL = "überspiel"
 
 class Call(Enum):
     WAHRHEIT = "wahrheit"
@@ -160,6 +159,33 @@ class EventLogger:
 def hand_value(a: int, b: int) -> int:
     s = a + b
     return 0 if s in (20, 21, 22) else s
+
+
+FORCED_BLUFF_LABEL = "erzwungener_bluff"
+
+
+def hand_category(a: int, b: int) -> Optional[SignalLevel]:
+    total = a + b
+    if total == 19:
+        return SignalLevel.HOCH
+    if total in (16, 17, 18):
+        return SignalLevel.MITTEL
+    if total in (14, 15):
+        return SignalLevel.TIEF
+    if total in (20, 21, 22):
+        return None
+    # Falls Werte außerhalb des erwarteten Bereichs auftauchen, ordnen wir sie dem
+    # nächsten sinnvollen Bereich zu, statt einen Laufzeitfehler zu riskieren.
+    if total > 22:
+        return None
+    if total >= 16:
+        return SignalLevel.MITTEL
+    return SignalLevel.TIEF
+
+
+def hand_category_label(a: int, b: int) -> str:
+    level = hand_category(a, b)
+    return FORCED_BLUFF_LABEL if level is None else level.value
 
 
 def hand_category(a: int, b: int) -> SignalLevel:
@@ -411,8 +437,6 @@ class GameEngine:
         self._ensure([Phase.SIGNAL_WAIT])
         if self.current.p1_signal is not None:
             raise RuntimeError("Signal bereits gesetzt.")
-        if level == SignalLevel.UEBERSPIEL:
-            raise ValueError("Das Signal 'überspiel' kann nicht aktiv gewählt werden.")
         self.current.p1_signal = level
         self._log("P1", "signal", {"level": level.value})
         self.current.phase = Phase.CALL_WAIT
@@ -456,8 +480,8 @@ class GameEngine:
             "reason": reason,
             "vp1_cards": vp1, "vp2_cards": vp2,
             "vp1_value": hand_value(*vp1), "vp2_value": hand_value(*vp2),
-            "vp1_category": hand_category(*vp1).value,
-            "vp2_category": hand_category(*vp2).value,
+            "vp1_category": hand_category_label(*vp1),
+            "vp2_category": hand_category_label(*vp2),
             "roles": {"P1": self.current.roles.p1_is.value, "P2": self.current.roles.p2_is.value}
         })
 
@@ -515,6 +539,7 @@ class GameEngine:
 
     def _resolve_outcome(self, call: Call) -> Tuple[Optional[Player], str, Optional[bool]]:
         actual_truth, p1_category, _ = self._determine_truth()
+        forced_bluff = (p1_category is None)
 
         if actual_truth is None:
             return (
@@ -534,6 +559,12 @@ class GameEngine:
                 return (
                     Player.P1,
                     "P1 sagte die richtige Kategorie, P2 erwartete Bluff → P1 gewinnt.",
+                    actual_truth,
+                )
+            if forced_bluff:
+                return (
+                    Player.P2,
+                    "P1 musste bluffen (20–22), P2 erwartete den Bluff → P2 gewinnt.",
                     actual_truth,
                 )
             return (
@@ -573,7 +604,11 @@ class GameEngine:
 
         return (
             Player.P1,
-            "P1 bluffte über die Kategorie, P2 glaubte → P1 gewinnt.",
+            (
+                "P1 musste bluffen (20–22) und P2 glaubte → P1 gewinnt."
+                if forced_bluff
+                else "P1 bluffte über die Kategorie, P2 glaubte → P1 gewinnt."
+            ),
             actual_truth,
         )
 
