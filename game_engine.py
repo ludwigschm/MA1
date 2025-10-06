@@ -29,8 +29,6 @@ class SignalLevel(Enum):
     HOCH = "hoch"
     MITTEL = "mittel"
     TIEF = "tief"
-    # Spieler:innen können "überspiel" nicht ansagen, wird aber intern zur Bewertung
-    # verwendet, wenn die Hand den Wert 20, 21 oder 22 hat (erzwungener Bluff).
     UEBERSPIEL = "überspiel"
 
 class Call(Enum):
@@ -170,15 +168,15 @@ def hand_category(a: int, b: int) -> SignalLevel:
         return SignalLevel.UEBERSPIEL
     if total == 19:
         return SignalLevel.HOCH
-    if total in (16, 17, 18):
+    if total in (17, 18):
         return SignalLevel.MITTEL
-    if total in (14, 15):
+    if total in (14, 15, 16):
         return SignalLevel.TIEF
     # Falls Werte außerhalb des erwarteten Bereichs auftauchen, ordnen wir sie dem
     # nächsten sinnvollen Bereich zu, statt einen Laufzeitfehler zu riskieren.
     if total > 22:
         return SignalLevel.UEBERSPIEL
-    if total >= 16:
+    if total >= 17:
         return SignalLevel.MITTEL
     return SignalLevel.TIEF
 
