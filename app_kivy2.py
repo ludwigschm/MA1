@@ -47,10 +47,16 @@ class TwoPlayerUI(BoxLayout):
         self.session_message = ""
 
         # Kopfzeile
-        header = BoxLayout(orientation="horizontal", size_hint_y=None, height=46, spacing=8)
+        self.header = BoxLayout(orientation="horizontal", size_hint_y=None, height=46, spacing=8)
         self.lbl_status = Label(text="", font_size=22)
-        header.add_widget(self.lbl_status)
-        self.add_widget(header)
+        self.lbl_points = Label(text="", font_size=20, size_hint_x=0.5)
+        self.header.add_widget(self.lbl_status)
+        self.header.add_widget(self.lbl_points)
+        self.add_widget(self.header)
+
+        # Container, der zwischen Spielbrett und Übergangsseite wechselt
+        self.content_container = BoxLayout(orientation="vertical")
+        self.add_widget(self.content_container)
 
         # Hauptbereich: VP1 links – Mitte – VP2 rechts
         self.board = GridLayout(cols=3, spacing=10, size_hint_y=0.82)
@@ -177,7 +183,39 @@ class TwoPlayerUI(BoxLayout):
         self.board.add_widget(self.col_vp1)
         self.board.add_widget(self.center_box)
         self.board.add_widget(self.col_vp2)
-        self.add_widget(self.board)
+        self.content_container.add_widget(self.board)
+
+        # Übergangsseite (Blank Page) vorbereiten
+        self.transition_box = BoxLayout(orientation="vertical", spacing=20, padding=40)
+        self.lbl_transition = Label(text="", font_size=22)
+        self.transition_box.add_widget(self.lbl_transition)
+        btn_row = BoxLayout(size_hint_y=None, height=60, spacing=40)
+        self.btn_transition_vp1 = Button(size_hint=(0.45, 1))
+        self.btn_transition_vp2 = Button(size_hint=(0.45, 1))
+        self.btn_transition_vp1.bind(on_release=lambda *_: self._continue_after_block(VP.VP1))
+        self.btn_transition_vp2.bind(on_release=lambda *_: self._continue_after_block(VP.VP2))
+        btn_row.add_widget(self.btn_transition_vp1)
+        btn_row.add_widget(self.btn_transition_vp2)
+        self.transition_box.add_widget(btn_row)
+
+        self.in_transition = False
+        self.transition_message = ""
+        self.transition_final = False
+        self.transition_ready_vp1 = False
+        self.transition_ready_vp2 = False
+
+        self.block_sequence = [
+            {"block": 1, "csv": "Paare1.csv", "condition": "no_payout", "payout": False},
+            {"block": 2, "csv": "Paare3.csv", "condition": "payout", "payout": True},
+            {"block": 3, "csv": "Paare2.csv", "condition": "no_payout", "payout": False},
+            {"block": 4, "csv": "Paare4.csv", "condition": "payout", "payout": True},
+        ]
+        self.current_block_idx: Optional[int] = None
+        self.next_block_idx: int = 0
+        self.session_identifier = ""
+        self.session_number_value: Optional[int] = None
+
+        self.log_dir = self.base / "logs"
 
         Clock.schedule_interval(lambda dt: self.refresh(), 0.1)
         Clock.schedule_once(lambda dt: self._open_session_dialog(), 0.1)
@@ -198,8 +236,7 @@ class TwoPlayerUI(BoxLayout):
             self._session_inputs[key] = ti
 
         add_field("Session (Zahl)", "session", "", input_filter="int")
-        add_field("Block", "block", "1", input_filter="int")
-        add_field("Bedingung", "condition", "no_payout")
+        add_field("Startblock", "block", "1", input_filter="int")
 
         content.add_widget(form)
         self._session_error = Label(text="", color=(1, 0, 0, 1), size_hint_y=None, height=24)
@@ -217,7 +254,6 @@ class TwoPlayerUI(BoxLayout):
     def _confirm_session(self):
         session_text = self._session_inputs["session"].text.strip()
         block_text = self._session_inputs["block"].text.strip()
-        condition_text = self._session_inputs["condition"].text.strip() or "no_payout"
 
         try:
             session_num = int(session_text)
@@ -229,41 +265,140 @@ class TwoPlayerUI(BoxLayout):
 
         try:
             block_num = int(block_text) if block_text else 1
-            if block_num <= 0:
+            if not (1 <= block_num <= len(self.block_sequence)):
                 raise ValueError
         except ValueError:
-            self._session_error.text = "Block muss eine positive Zahl sein."
+            self._session_error.text = f"Block muss zwischen 1 und {len(self.block_sequence)} liegen."
             return
 
-        condition = condition_text or "no_payout"
+        self.session_identifier = f"S{session_num:03d}"
+        self.session_number_value = session_num
+        self.next_block_idx = block_num - 1
+        self.current_block_idx = None
 
-        csv_file = self.base / f"Paare{block_num}.csv"
+        if self.engine:
+            self.engine.close()
+            self.engine = None
+
+        if self.session_popup:
+            self.session_popup.dismiss()
+            self.session_popup = None
+
+        self.session_message = f"Session {session_num}"
+        self._start_block()
+
+    def _show_board(self):
+        if self.transition_box.parent is self.content_container:
+            self.content_container.remove_widget(self.transition_box)
+        if self.board.parent is None:
+            self.content_container.add_widget(self.board)
+        self.in_transition = False
+        self.transition_message = ""
+
+    def _show_transition(self, message: str, button_text: str):
+        self.transition_message = message
+        self.btn_transition_vp1.text = f"{button_text} (VP1)"
+        self.btn_transition_vp2.text = f"{button_text} (VP2)"
+        self.btn_transition_vp1.disabled = False
+        self.btn_transition_vp2.disabled = False
+        self.transition_ready_vp1 = False
+        self.transition_ready_vp2 = False
+        self.lbl_transition.text = message
+        if self.board.parent is self.content_container:
+            self.content_container.remove_widget(self.board)
+        if self.transition_box.parent is None:
+            self.content_container.add_widget(self.transition_box)
+        self.in_transition = True
+        self.lbl_points.text = ""
+
+    def _start_block(self):
+        if not self.session_identifier:
+            return
+        if self.next_block_idx >= len(self.block_sequence):
+            message = (
+                "Alle Blöcke sind abgeschlossen. Vielen Dank!"
+            )
+            self.transition_final = True
+            self._show_transition(message, "Experiment beenden")
+            return
+
+        block_info = self.block_sequence[self.next_block_idx]
+        csv_file = self.base / block_info["csv"]
         if not csv_file.exists():
-            self._session_error.text = f"CSV für Block {block_num} nicht gefunden."
+            self.lbl_info.text = f"CSV {block_info['csv']} nicht gefunden."
             return
 
-        session_id = f"S{session_num:03d}"
-        log_dir = self.base / "logs"
+        self.log_dir.mkdir(parents=True, exist_ok=True)
         cfg = GameEngineConfig(
-            session_id=session_id,
-            session_number=session_num,
-            block=block_num,
-            condition=condition,
+            session_id=self.session_identifier,
+            session_number=self.session_number_value,
+            block=block_info["block"],
+            condition=block_info["condition"],
             csv_path=str(csv_file),
-            db_path=str(log_dir / f"events_{session_id}.sqlite3"),
+            db_path=str(self.log_dir / f"events_{self.session_identifier}.sqlite3"),
             csv_log_path=None,
-            log_dir=str(log_dir),
+            log_dir=str(self.log_dir),
+            payout=block_info["payout"],
+            payout_start_points=16 if block_info["payout"] else 0,
         )
 
         if self.engine:
             self.engine.close()
 
         self.engine = GameEngine(cfg)
-        if self.session_popup:
-            self.session_popup.dismiss()
-            self.session_popup = None
-        self.session_message = f"Session {session_num}, Block {block_num}, {condition}"
+        self.current_block_idx = self.next_block_idx
+        self.next_block_idx = self.current_block_idx + 1
+        condition_label = "Auszahlung" if block_info["payout"] else "ohne Auszahlung"
+        self.session_message = (
+            f"Session {self.session_number_value}, Block {block_info['block']} ({condition_label})"
+        )
+        self.transition_final = False
+        self._show_board()
         self.refresh()
+
+    def _handle_block_finished(self):
+        if self.in_transition:
+            return
+        finished_info = None
+        if self.current_block_idx is not None and self.current_block_idx < len(self.block_sequence):
+            finished_info = self.block_sequence[self.current_block_idx]
+        if self.engine:
+            self.engine.close()
+            self.engine = None
+        block_label = finished_info["block"] if finished_info else ""
+        if self.next_block_idx < len(self.block_sequence):
+            message = (
+                f"Block {block_label} ist fertig. Atmen Sie einen Moment durch und klicken Sie auf Weiter, "
+                "wenn Sie bereit für den nächsten Block sind."
+            )
+            button_text = "Weiter"
+            self.transition_final = False
+        else:
+            message = (
+                f"Block {block_label} ist fertig. Atmen Sie einen Moment durch und klicken Sie auf Weiter, "
+                "wenn Sie bereit sind, das Experiment zu beenden."
+            )
+            button_text = "Experiment beenden"
+            self.transition_final = True
+        self.current_block_idx = None
+        self._show_transition(message, button_text)
+
+    def _continue_after_block(self, vp: VP):
+        if vp == VP.VP1:
+            self.transition_ready_vp1 = True
+            self.btn_transition_vp1.disabled = True
+        elif vp == VP.VP2:
+            self.transition_ready_vp2 = True
+            self.btn_transition_vp2.disabled = True
+
+        if not (self.transition_ready_vp1 and self.transition_ready_vp2):
+            return
+
+        if self.transition_final and self.next_block_idx >= len(self.block_sequence):
+            self.lbl_info.text = "Experiment abgeschlossen."
+            self.lbl_status.text = "Experiment abgeschlossen."
+            return
+        self._start_block()
 
     # ===== Helper =====
     def _img_for_value(self, val: Optional[int]) -> str:
@@ -364,11 +499,36 @@ class TwoPlayerUI(BoxLayout):
 
     # ===== Refresh =====
     def refresh(self):
+        if self.in_transition:
+            self.lbl_status.text = self.transition_message or "Blockpause"
+            self.lbl_roles.text = ""
+            self.lbl_next.text = "Nächster Zug: –"
+            self.lbl_info.text = self.transition_message
+            self.lbl_points.text = ""
+            for btn in [
+                self.btn_start_vp1, self.btn_start_vp2,
+                self.btn_vp1_c1, self.btn_vp1_c2,
+                self.btn_vp2_c1, self.btn_vp2_c2,
+                self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t,
+                self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t,
+                self.btn_call1_truth, self.btn_call1_bluff,
+                self.btn_call2_truth, self.btn_call2_bluff,
+            ]:
+                btn.disabled = True
+            for img in [self.vp1_img1, self.vp1_img2, self.vp2_img1, self.vp2_img2]:
+                img.source = self.img_back
+                img.reload()
+            for img in [self.mid_vp1_1, self.mid_vp1_2, self.mid_vp2_1, self.mid_vp2_2]:
+                img.source = ""
+                img.reload()
+            return
+
         if not self.engine:
             self.lbl_status.text = "Session wählen"
             self.lbl_roles.text = ""
             self.lbl_next.text = "Nächster Zug: –"
             self.lbl_info.text = "Bitte Sessiondaten bestätigen."
+            self.lbl_points.text = ""
             self.btn_start_vp1.disabled = True
             self.btn_start_vp2.disabled = True
             self.btn_vp1_c1.disabled = True
@@ -391,6 +551,10 @@ class TwoPlayerUI(BoxLayout):
             return
 
         st = self.engine.get_public_state()
+        if st.get("phase") == "FINISHED":
+            self._handle_block_finished()
+            return
+
         rs = self.engine.current
 
         self.lbl_status.text = f"Runde {st['round_index']+1} – Phase: {st['phase']}"
@@ -400,6 +564,14 @@ class TwoPlayerUI(BoxLayout):
             self.lbl_info.text = outcome
         else:
             self.lbl_info.text = self.session_message
+
+        scores = st.get("scores")
+        if scores:
+            self.lbl_points.text = (
+                f"Punkte – VP1: {scores.get('VP1', '')} | VP2: {scores.get('VP2', '')}"
+            )
+        else:
+            self.lbl_points.text = ""
 
         # S1/S2-Beschriftung korrekt je Seite
         is_vp1_p1 = (st["roles"]["P1"] == "VP1")
