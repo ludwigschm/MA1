@@ -1,17 +1,26 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
+
+from functools import partial
 
 from kivy.app import App
 from kivy.clock import Clock
+from kivy.config import Config
+from kivy.core.window import Window
+from kivy.graphics import (
+    Color, RoundedRectangle, PushMatrix, PopMatrix, Rotate
+)
+from kivy.properties import NumericProperty
+from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.gridlayout import GridLayout
-from kivy.uix.label import Label
 from kivy.uix.button import Button
+from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.image import Image
+from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.textinput import TextInput
-from kivy.config import Config
+from kivy.uix.widget import Widget
 
 # Optional Vollbild
 # Config.set('graphics', 'fullscreen', '1')
@@ -26,175 +35,332 @@ def signal_truth_mapping(p1_cards: Tuple[int, int], level: SignalLevel) -> bool:
     return hand_category(*p1_cards) == level
 
 
+class AutoLabel(Label):
+    def __init__(self, **kwargs):
+        kwargs.setdefault("halign", "center")
+        kwargs.setdefault("valign", "middle")
+        super().__init__(**kwargs)
+        self.bind(size=self._update_text_size)
+
+    def _update_text_size(self, *_):
+        self.text_size = self.size
+
+
+class InfoBox(BoxLayout):
+    def __init__(self, **kwargs):
+        padding = kwargs.pop("padding", (24, 18, 24, 18))
+        spacing = kwargs.pop("spacing", 12)
+        super().__init__(orientation="vertical", padding=padding, spacing=spacing, **kwargs)
+        with self.canvas.before:
+            self._bg_color = Color(1, 1, 1, 1)
+            self._bg_rect = RoundedRectangle(radius=[18], pos=self.pos, size=self.size)
+        self.bind(pos=self._update_rect, size=self._update_rect)
+
+    def _update_rect(self, *_):
+        self._bg_rect.pos = self.pos
+        self._bg_rect.size = self.size
+
+
+class RotatableBoxLayout(BoxLayout):
+    angle = NumericProperty(0)
+
+    def __init__(self, angle: float = 0, **kwargs):
+        super().__init__(**kwargs)
+        with self.canvas.before:
+            PushMatrix()
+            self._rot = Rotate(angle=angle, origin=self.center)
+        with self.canvas.after:
+            PopMatrix()
+        self.angle = angle
+        self.bind(pos=self._update_transform, size=self._update_transform, angle=self._update_transform)
+
+    def _update_transform(self, *_):
+        if hasattr(self, "_rot"):
+            self._rot.origin = self.center
+            self._rot.angle = self.angle
+
+
+class IconButton(Button):
+    def __init__(self, stop_source: str, live_source: str, **kwargs):
+        kwargs.setdefault("size_hint", (None, None))
+        kwargs.setdefault("background_color", (1, 1, 1, 0))
+        kwargs.setdefault("border", (0, 0, 0, 0))
+        super().__init__(**kwargs)
+        self.stop_source = stop_source
+        self.live_source = live_source
+        self.set_state(False, highlighted=False)
+
+    def set_state(self, enabled: bool, highlighted: bool = False):
+        show_live = highlighted or enabled
+        self.disabled = not enabled
+        normal = self.live_source if show_live else self.stop_source
+        self.background_normal = normal
+        self.background_down = self.live_source
+        self.background_disabled_normal = self.live_source if highlighted else self.stop_source
+        self.background_disabled_down = self.background_disabled_normal
+
+
+class StatusBadge(BoxLayout):
+    def __init__(self, text: str, **kwargs):
+        kwargs.setdefault("size_hint", (None, None))
+        kwargs.setdefault("width", 170)
+        kwargs.setdefault("height", 90)
+        kwargs.setdefault("padding", (10, 8, 10, 8))
+        super().__init__(orientation="vertical", **kwargs)
+        with self.canvas.before:
+            self._color = Color(0.75, 0.75, 0.75, 1)
+            self._rect = RoundedRectangle(radius=[16], pos=self.pos, size=self.size)
+        self.bind(pos=self._update_rect, size=self._update_rect)
+        self.label = AutoLabel(text=text, font_size=22, color=(0, 0, 0, 1))
+        self.add_widget(self.label)
+
+    def _update_rect(self, *_):
+        self._rect.pos = self.pos
+        self._rect.size = self.size
+
+    def set_active(self, active: bool):
+        self._color.rgba = (0.25, 0.25, 0.25, 1) if active else (0.75, 0.75, 0.75, 1)
+
+
+class PlayerPanel(RotatableBoxLayout):
+    def __init__(self, ux_dir: Path, **kwargs):
+        angle = kwargs.pop("angle", 0)
+        super().__init__(angle=angle, orientation="vertical", spacing=18, size_hint=(None, None), **kwargs)
+        self.bind(minimum_height=self.setter("height"))
+        self.width = 220
+
+        self.play_button = IconButton(str(ux_dir / "play_stop.png"), str(ux_dir / "play_live.png"), size=(130, 130))
+        self.add_widget(self.play_button)
+
+        self.add_widget(Widget(size_hint=(1, None), height=10))
+
+        # Call buttons
+        call_box = BoxLayout(orientation="vertical", spacing=12, size_hint=(1, None))
+        call_box.bind(minimum_height=call_box.setter("height"))
+        self.call_buttons = {
+            Call.WAHRHEIT: IconButton(str(ux_dir / "wahr_stop.png"), str(ux_dir / "wahr_live.png"), size=(130, 130)),
+            Call.BLUFF: IconButton(str(ux_dir / "bluff_stop.png"), str(ux_dir / "bluff_live.png"), size=(130, 130)),
+        }
+        call_box.add_widget(self.call_buttons[Call.WAHRHEIT])
+        call_box.add_widget(self.call_buttons[Call.BLUFF])
+        self.add_widget(call_box)
+
+        # Signal buttons
+        signal_box = BoxLayout(orientation="vertical", spacing=12, size_hint=(1, None))
+        signal_box.bind(minimum_height=signal_box.setter("height"))
+        self.signal_buttons = {}
+        for level in (SignalLevel.HOCH, SignalLevel.MITTEL, SignalLevel.TIEF):
+            btn = IconButton(str(ux_dir / f"{level.value}_stop.png"), str(ux_dir / f"{level.value}_live.png"), size=(130, 130))
+            self.signal_buttons[level] = btn
+            signal_box.add_widget(btn)
+        self.add_widget(signal_box)
+
+        # Status badges
+        badge_box = BoxLayout(orientation="vertical", spacing=10, size_hint=(1, None))
+        badge_box.bind(minimum_height=badge_box.setter("height"))
+        self.status_badges = {
+            SignalLevel.HOCH: StatusBadge("HOCH\n19"),
+            SignalLevel.MITTEL: StatusBadge("MITTEL\n18/17/16"),
+            SignalLevel.TIEF: StatusBadge("TIEF\n15/14"),
+        }
+        for badge in self.status_badges.values():
+            badge_box.add_widget(badge)
+        self.add_widget(badge_box)
+
+        self.score_label = AutoLabel(text="", font_size=20, color=(0, 0, 0, 1), size_hint=(1, None), height=50)
+        self.add_widget(self.score_label)
+
+    def bind_play(self, callback):
+        self.play_button.bind(on_release=callback)
+
+    def bind_call(self, callback):
+        for call, btn in self.call_buttons.items():
+            btn.bind(on_release=partial(callback, call))
+
+    def bind_signal(self, callback):
+        for level, btn in self.signal_buttons.items():
+            btn.bind(on_release=partial(callback, level))
+
+    def set_play_state(self, enabled: bool):
+        self.play_button.set_state(enabled, highlighted=enabled)
+
+    def set_call_state(self, enabled: bool, selected: Optional[Call]):
+        for call, btn in self.call_buttons.items():
+            highlight = (selected == call)
+            btn.set_state(enabled if not highlight else False, highlighted=highlight)
+
+    def set_signal_state(self, enabled: bool, selected: Optional[SignalLevel]):
+        for level, btn in self.signal_buttons.items():
+            highlight = (selected == level)
+            btn.set_state(enabled if not highlight else False, highlighted=highlight)
+
+    def set_category(self, category: Optional[SignalLevel]):
+        for level, badge in self.status_badges.items():
+            badge.set_active(category == level)
+
+    def set_score(self, text: str):
+        self.score_label.text = text
+
+
+class CardWidget(ButtonBehavior, Image):
+    angle = NumericProperty(0)
+
+    def __init__(self, ui: "TwoPlayerUI", owner: VP, index: int, angle: float = 0, **kwargs):
+        kwargs.setdefault("size_hint", (None, None))
+        kwargs.setdefault("allow_stretch", True)
+        kwargs.setdefault("keep_ratio", True)
+        super().__init__(**kwargs)
+        self.ui = ui
+        self.owner = owner
+        self.index = index
+        self.angle = angle
+        self.face_up = False
+        self.expected = False
+        self.back_source = ui.img_back
+        self.front_source = ui.img_back
+        with self.canvas.before:
+            PushMatrix()
+            self._rot = Rotate(angle=angle, origin=self.center)
+        with self.canvas.after:
+            PopMatrix()
+        self.source = self.back_source
+        self.opacity = 0.7
+        self.bind(pos=self._update_transform, size=self._update_transform)
+
+    def _update_transform(self, *_):
+        self._rot.origin = self.center
+
+    def on_release(self):
+        if not self.disabled:
+            self.ui._reveal(self.owner, self.index)
+
+    def set_card(self, value: Optional[int], face_up: bool, front_source: Optional[str] = None):
+        if front_source:
+            self.front_source = front_source
+        else:
+            self.front_source = self.ui._img_for_value(value)
+        self.face_up = face_up
+        self.source = self.front_source if face_up else self.back_source
+        self.opacity = 1.0 if face_up or not self.disabled else 0.7
+        self.reload()
+
+    def set_interactive(self, enabled: bool):
+        self.disabled = not enabled
+        if not enabled and not self.face_up:
+            self.opacity = 0.7
+        elif enabled:
+            self.opacity = 1.0
+
 class TwoPlayerUI(BoxLayout):
     def __init__(self, **kwargs):
-        super().__init__(orientation="vertical", spacing=8, padding=8, **kwargs)
+        Window.clearcolor = (191 / 255, 191 / 255, 191 / 255, 1)
+        super().__init__(orientation="vertical", padding=0, spacing=0, **kwargs)
 
         base = Path(__file__).resolve().parent
+        self.base = base
         self.card_dir = base / "Karten"
         self.img_back = str(self.card_dir / "back.png") if (self.card_dir / "back.png").exists() else ""
 
-        self.base = base
         self.engine: Optional[GameEngine] = None
         self.session_popup: Optional[Popup] = None
         self._session_inputs = {}
         self.session_message = ""
 
-        # Kopfzeile
-        self.header = BoxLayout(orientation="horizontal", size_hint_y=None, height=46, spacing=8)
-        self.lbl_status = Label(text="", font_size=22)
-        self.lbl_points = Label(text="", font_size=20, size_hint_x=0.5)
-        self.header.add_widget(self.lbl_status)
-        self.header.add_widget(self.lbl_points)
-        self.add_widget(self.header)
-
         # Container, der zwischen Spielbrett und Übergangsseite wechselt
-        self.content_container = BoxLayout(orientation="vertical")
+        self.content_container = FloatLayout()
         self.add_widget(self.content_container)
 
-        # Hauptbereich: VP1 links – Mitte – VP2 rechts
-        self.board = GridLayout(cols=3, spacing=10, size_hint_y=0.82)
+        ux_dir = base / "UX"
 
-        # ===== VP1 (immer links) =====
-        self.col_vp1 = BoxLayout(orientation="vertical", spacing=6)
-        self.lbl_vp1 = Label(text="VP1", font_size=18, size_hint_y=None, height=26)
-        self.col_vp1.add_widget(self.lbl_vp1)
-
-        self.vp1_img1 = Image(size_hint_y=0.42)
-        self.vp1_img2 = Image(size_hint_y=0.42)
-        self.col_vp1.add_widget(self.vp1_img1)
-        self.col_vp1.add_widget(self.vp1_img2)
-
-        # Start/Weiter für VP1 (rollenrichtig)
-        self.btn_start_vp1 = Button(text="Start (VP1)", size_hint_y=None, height=48,
-                                    on_release=lambda *_: self._start_or_next_for_vp(VP.VP1))
-        self.col_vp1.add_widget(self.btn_start_vp1)
-
-        # Signal & Call unter VP1
-        row_vp1_actions = GridLayout(cols=2, spacing=6, size_hint_y=None, height=96)
-        # Signal (S1)
-        box_sig1 = BoxLayout(orientation="vertical", spacing=2)
-        box_sig1.add_widget(Label(text="Signal", size_hint_y=None, height=20))
-        row_sig1 = BoxLayout(spacing=4)
-        self.btn_sig1_h = Button(text="hoch", on_release=lambda *_: self._signal_from_vp(VP.VP1, SignalLevel.HOCH))
-        self.btn_sig1_m = Button(text="mittel", on_release=lambda *_: self._signal_from_vp(VP.VP1, SignalLevel.MITTEL))
-        self.btn_sig1_t = Button(text="tief", on_release=lambda *_: self._signal_from_vp(VP.VP1, SignalLevel.TIEF))
-        row_sig1.add_widget(self.btn_sig1_h)
-        row_sig1.add_widget(self.btn_sig1_m)
-        row_sig1.add_widget(self.btn_sig1_t)
-        box_sig1.add_widget(row_sig1)
-        # Call (S2)
-        box_call1 = BoxLayout(orientation="vertical", spacing=2)
-        box_call1.add_widget(Label(text="Call", size_hint_y=None, height=20))
-        row_call1 = BoxLayout(spacing=4)
-        self.btn_call1_truth = Button(text="Wahrheit", on_release=lambda *_: self._call_from_vp(VP.VP1, Call.WAHRHEIT))
-        self.btn_call1_bluff = Button(text="Bluff", on_release=lambda *_: self._call_from_vp(VP.VP1, Call.BLUFF))
-        row_call1.add_widget(self.btn_call1_truth); row_call1.add_widget(self.btn_call1_bluff)
-        box_call1.add_widget(row_call1)
-        row_vp1_actions.add_widget(box_sig1)
-        row_vp1_actions.add_widget(box_call1)
-        self.col_vp1.add_widget(row_vp1_actions)
-
-        # Aufdeck-Buttons für VP1
-        self.btn_vp1_c1 = Button(text="VP1: Karte 1", size_hint_y=None, height=48,
-                                 on_release=lambda *_: self._reveal(VP.VP1, 0))
-        self.btn_vp1_c2 = Button(text="VP1: Karte 2", size_hint_y=None, height=48,
-                                 on_release=lambda *_: self._reveal(VP.VP1, 1))
-        self.col_vp1.add_widget(self.btn_vp1_c1)
-        self.col_vp1.add_widget(self.btn_vp1_c2)
-
-        # ===== Mitte (beide Hände nach Call) =====
-        self.center_box = BoxLayout(orientation="vertical", spacing=6)
-        self.lbl_roles = Label(text="", font_size=16, size_hint_y=None, height=24)
-        self.center_box.add_widget(self.lbl_roles)
-        self.lbl_next = Label(text="", font_size=16, size_hint_y=None, height=22)
-        self.center_box.add_widget(self.lbl_next)
-
-        grid_mid = GridLayout(cols=2, spacing=6, size_hint_y=0.9)
-        # VP1 Hand
-        self.mid_vp1_1, self.mid_vp1_2 = Image(), Image()
-        box_mid1 = BoxLayout(orientation="vertical")
-        box_mid1.add_widget(Label(text="VP1-Hand", size_hint_y=None, height=20))
-        box_mid1.add_widget(self.mid_vp1_1)
-        box_mid1.add_widget(self.mid_vp1_2)
-        # VP2 Hand
-        self.mid_vp2_1, self.mid_vp2_2 = Image(), Image()
-        box_mid2 = BoxLayout(orientation="vertical")
-        box_mid2.add_widget(Label(text="VP2-Hand", size_hint_y=None, height=20))
-        box_mid2.add_widget(self.mid_vp2_1)
-        box_mid2.add_widget(self.mid_vp2_2)
-        grid_mid.add_widget(box_mid1); grid_mid.add_widget(box_mid2)
-        self.center_box.add_widget(grid_mid)
-
-        self.lbl_info = Label(text="", font_size=18, size_hint_y=None, height=28)
-        self.center_box.add_widget(self.lbl_info)
-
-        # ===== VP2 (immer rechts) =====
-        self.col_vp2 = BoxLayout(orientation="vertical", spacing=6)
-        self.lbl_vp2 = Label(text="VP2", font_size=18, size_hint_y=None, height=26)
-        self.col_vp2.add_widget(self.lbl_vp2)
-
-        self.vp2_img1 = Image(size_hint_y=0.42)
-        self.vp2_img2 = Image(size_hint_y=0.42)
-        self.col_vp2.add_widget(self.vp2_img1)
-        self.col_vp2.add_widget(self.vp2_img2)
-
-        # Start/Weiter für VP2
-        self.btn_start_vp2 = Button(text="Start (VP2)", size_hint_y=None, height=48,
-                                    on_release=lambda *_: self._start_or_next_for_vp(VP.VP2))
-        self.col_vp2.add_widget(self.btn_start_vp2)
-
-        # Signal & Call unter VP2
-        row_vp2_actions = GridLayout(cols=2, spacing=6, size_hint_y=None, height=96)
-        # Signal (S1)
-        box_sig2 = BoxLayout(orientation="vertical", spacing=2)
-        box_sig2.add_widget(Label(text="Signal", size_hint_y=None, height=20))
-        row_sig2 = BoxLayout(spacing=4)
-        self.btn_sig2_h = Button(text="hoch", on_release=lambda *_: self._signal_from_vp(VP.VP2, SignalLevel.HOCH))
-        self.btn_sig2_m = Button(text="mittel", on_release=lambda *_: self._signal_from_vp(VP.VP2, SignalLevel.MITTEL))
-        self.btn_sig2_t = Button(text="tief", on_release=lambda *_: self._signal_from_vp(VP.VP2, SignalLevel.TIEF))
-        row_sig2.add_widget(self.btn_sig2_h)
-        row_sig2.add_widget(self.btn_sig2_m)
-        row_sig2.add_widget(self.btn_sig2_t)
-        box_sig2.add_widget(row_sig2)
-        # Call (S2)
-        box_call2 = BoxLayout(orientation="vertical", spacing=2)
-        box_call2.add_widget(Label(text="Call", size_hint_y=None, height=20))
-        row_call2 = BoxLayout(spacing=4)
-        self.btn_call2_truth = Button(text="Wahrheit", on_release=lambda *_: self._call_from_vp(VP.VP2, Call.WAHRHEIT))
-        self.btn_call2_bluff = Button(text="Bluff", on_release=lambda *_: self._call_from_vp(VP.VP2, Call.BLUFF))
-        row_call2.add_widget(self.btn_call2_truth); row_call2.add_widget(self.btn_call2_bluff)
-        box_call2.add_widget(row_call2)
-        row_vp2_actions.add_widget(box_sig2)
-        row_vp2_actions.add_widget(box_call2)
-        self.col_vp2.add_widget(row_vp2_actions)
-
-        # Aufdeck-Buttons für VP2
-        self.btn_vp2_c1 = Button(text="VP2: Karte 1", size_hint_y=None, height=48,
-                                 on_release=lambda *_: self._reveal(VP.VP2, 0))
-        self.btn_vp2_c2 = Button(text="VP2: Karte 2", size_hint_y=None, height=48,
-                                 on_release=lambda *_: self._reveal(VP.VP2, 1))
-        self.col_vp2.add_widget(self.btn_vp2_c1)
-        self.col_vp2.add_widget(self.btn_vp2_c2)
-
-        # Board zusammenbauen
-        self.board.add_widget(self.col_vp1)
-        self.board.add_widget(self.center_box)
-        self.board.add_widget(self.col_vp2)
+        # Hauptebene des Spielbretts
+        self.board = FloatLayout(size_hint=(1, 1))
         self.content_container.add_widget(self.board)
 
-        # Übergangsseite (Blank Page) vorbereiten
-        self.transition_box = BoxLayout(orientation="vertical", spacing=20, padding=40)
-        self.lbl_transition = Label(text="", font_size=22)
-        self.transition_box.add_widget(self.lbl_transition)
-        btn_row = BoxLayout(size_hint_y=None, height=60, spacing=40)
-        self.btn_transition_vp1 = Button(size_hint=(0.45, 1))
-        self.btn_transition_vp2 = Button(size_hint=(0.45, 1))
+        # Informationsboxen
+        self.top_info_wrapper = RotatableBoxLayout(
+            angle=180,
+            size_hint=(0.62, None),
+            height=190,
+            pos_hint={"center_x": 0.5, "top": 0.97},
+        )
+        self.top_info_box = InfoBox(size_hint=(1, 1))
+        self.top_info_label = AutoLabel(text="", font_size=32, color=(0, 0, 0, 1))
+        self.top_info_box.add_widget(self.top_info_label)
+        self.top_info_wrapper.add_widget(self.top_info_box)
+        self.board.add_widget(self.top_info_wrapper)
+
+        self.bottom_info_box = InfoBox(
+            size_hint=(0.62, None),
+            height=190,
+            pos_hint={"center_x": 0.5, "y": 0.03},
+        )
+        self.bottom_info_label = AutoLabel(text="", font_size=32, color=(0, 0, 0, 1))
+        self.bottom_detail_label = AutoLabel(text="", font_size=24, color=(0.2, 0.2, 0.2, 1))
+        self.bottom_info_box.add_widget(self.bottom_info_label)
+        self.bottom_info_box.add_widget(self.bottom_detail_label)
+        self.board.add_widget(self.bottom_info_box)
+
+        # Kartenbereich in der Mitte, der sich an die Fenstergröße anpasst
+        self.card_area = FloatLayout(size_hint=(0.48, 0.68), pos_hint={"center_x": 0.5, "center_y": 0.5})
+        self.board.add_widget(self.card_area)
+
+        self.card_widgets: Dict[Tuple[VP, int], CardWidget] = {}
+        self._card_aspect = 320 / 220  # Verhältnis Höhe zu Breite
+        for vp, idx, angle in [
+            (VP.VP2, 0, 180),
+            (VP.VP2, 1, 180),
+            (VP.VP1, 0, 0),
+            (VP.VP1, 1, 0),
+        ]:
+            widget = CardWidget(self, vp, idx, angle=angle)
+            widget.size_hint = (None, None)
+            self.card_widgets[(vp, idx)] = widget
+            self.card_area.add_widget(widget)
+
+        self.card_area.bind(size=self._update_card_layout, pos=self._update_card_layout)
+        Clock.schedule_once(lambda dt: self._update_card_layout(), 0)
+
+        # Steuerpanels
+        self.vp1_panel = PlayerPanel(ux_dir, angle=0)
+        self.vp1_panel.pos_hint = {"x": 0.035, "center_y": 0.5}
+        self.vp1_panel.bind_play(lambda *_: self._start_or_next_for_vp(VP.VP1))
+        self.vp1_panel.bind_signal(lambda level, *_: self._signal_from_vp(VP.VP1, level))
+        self.vp1_panel.bind_call(lambda call, *_: self._call_from_vp(VP.VP1, call))
+        self.board.add_widget(self.vp1_panel)
+
+        self.vp2_panel = PlayerPanel(ux_dir, angle=180)
+        self.vp2_panel.pos_hint = {"right": 0.965, "center_y": 0.5}
+        self.vp2_panel.bind_play(lambda *_: self._start_or_next_for_vp(VP.VP2))
+        self.vp2_panel.bind_signal(lambda level, *_: self._signal_from_vp(VP.VP2, level))
+        self.vp2_panel.bind_call(lambda call, *_: self._call_from_vp(VP.VP2, call))
+        self.board.add_widget(self.vp2_panel)
+
+        # Übergangsüberlagerung
+        self.transition_box = FloatLayout()
+        self.transition_panel = InfoBox(size_hint=(0.7, None), height=420, pos_hint={"center_x": 0.5, "center_y": 0.5})
+        self.lbl_transition = AutoLabel(text="", font_size=32, color=(0, 0, 0, 1))
+        self.transition_panel.add_widget(self.lbl_transition)
+        self.transition_panel.add_widget(Widget(size_hint=(1, None), height=30))
+        btn_row = BoxLayout(size_hint=(1, None), height=180, spacing=60)
+
+        self.transition_btn_vp1 = BoxLayout(orientation="vertical", spacing=12, size_hint=(0.5, 1))
+        self.btn_transition_vp1 = IconButton(str(ux_dir / "play_stop.png"), str(ux_dir / "play_live.png"), size=(150, 150))
+        self.transition_label_vp1 = AutoLabel(text="", font_size=26, color=(0, 0, 0, 1), size_hint=(1, None), height=40)
         self.btn_transition_vp1.bind(on_release=lambda *_: self._continue_after_block(VP.VP1))
+        self.transition_btn_vp1.add_widget(self.btn_transition_vp1)
+        self.transition_btn_vp1.add_widget(self.transition_label_vp1)
+
+        self.transition_btn_vp2 = BoxLayout(orientation="vertical", spacing=12, size_hint=(0.5, 1))
+        self.btn_transition_vp2 = IconButton(str(ux_dir / "play_stop.png"), str(ux_dir / "play_live.png"), size=(150, 150))
+        self.transition_label_vp2 = AutoLabel(text="", font_size=26, color=(0, 0, 0, 1), size_hint=(1, None), height=40)
         self.btn_transition_vp2.bind(on_release=lambda *_: self._continue_after_block(VP.VP2))
-        btn_row.add_widget(self.btn_transition_vp1)
-        btn_row.add_widget(self.btn_transition_vp2)
-        self.transition_box.add_widget(btn_row)
+        self.transition_btn_vp2.add_widget(self.btn_transition_vp2)
+        self.transition_btn_vp2.add_widget(self.transition_label_vp2)
+
+        btn_row.add_widget(self.transition_btn_vp1)
+        btn_row.add_widget(self.transition_btn_vp2)
+        self.transition_panel.add_widget(btn_row)
+        self.transition_box.add_widget(self.transition_panel)
 
         self.in_transition = False
         self.transition_message = ""
@@ -295,10 +461,10 @@ class TwoPlayerUI(BoxLayout):
 
     def _show_transition(self, message: str, button_text: str):
         self.transition_message = message
-        self.btn_transition_vp1.text = f"{button_text} (VP1)"
-        self.btn_transition_vp2.text = f"{button_text} (VP2)"
-        self.btn_transition_vp1.disabled = False
-        self.btn_transition_vp2.disabled = False
+        self.transition_label_vp1.text = f"{button_text} (VP1)"
+        self.transition_label_vp2.text = f"{button_text} (VP2)"
+        self.btn_transition_vp1.set_state(True, highlighted=True)
+        self.btn_transition_vp2.set_state(True, highlighted=True)
         self.transition_ready_vp1 = False
         self.transition_ready_vp2 = False
         self.lbl_transition.text = message
@@ -307,7 +473,18 @@ class TwoPlayerUI(BoxLayout):
         if self.transition_box.parent is None:
             self.content_container.add_widget(self.transition_box)
         self.in_transition = True
-        self.lbl_points.text = ""
+        self.bottom_info_label.text = message
+        self.bottom_detail_label.text = ""
+        self.top_info_label.text = message
+        for panel in (self.vp1_panel, self.vp2_panel):
+            panel.set_play_state(False)
+            panel.set_signal_state(False, None)
+            panel.set_call_state(False, None)
+            panel.set_score("")
+            panel.set_category(None)
+        for widget in self.card_widgets.values():
+            widget.set_card(None, False)
+            widget.set_interactive(False)
 
     def _start_block(self):
         if not self.session_identifier:
@@ -323,7 +500,8 @@ class TwoPlayerUI(BoxLayout):
         block_info = self.block_sequence[self.next_block_idx]
         csv_file = self.base / block_info["csv"]
         if not csv_file.exists():
-            self.lbl_info.text = f"CSV {block_info['csv']} nicht gefunden."
+            self.bottom_info_label.text = "Fehlende CSV"
+            self.bottom_detail_label.text = f"CSV {block_info['csv']} nicht gefunden."
             return
 
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -384,21 +562,56 @@ class TwoPlayerUI(BoxLayout):
     def _continue_after_block(self, vp: VP):
         if vp == VP.VP1:
             self.transition_ready_vp1 = True
-            self.btn_transition_vp1.disabled = True
+            self.btn_transition_vp1.set_state(False, highlighted=True)
         elif vp == VP.VP2:
             self.transition_ready_vp2 = True
-            self.btn_transition_vp2.disabled = True
+            self.btn_transition_vp2.set_state(False, highlighted=True)
 
         if not (self.transition_ready_vp1 and self.transition_ready_vp2):
             return
 
         if self.transition_final and self.next_block_idx >= len(self.block_sequence):
-            self.lbl_info.text = "Experiment abgeschlossen."
-            self.lbl_status.text = "Experiment abgeschlossen."
+            self.bottom_info_label.text = "Experiment abgeschlossen."
+            self.top_info_label.text = "Experiment abgeschlossen."
+            self.bottom_detail_label.text = ""
             return
         self._start_block()
 
     # ===== Helper =====
+    def _update_card_layout(self, *_):
+        if not hasattr(self, "card_area"):
+            return
+
+        area_w, area_h = self.card_area.size
+        if area_w <= 0 or area_h <= 0:
+            return
+
+        spacing = min(area_w, area_h) * 0.08
+        available_w = area_w - spacing
+        available_h = area_h - spacing
+        if available_w <= 0 or available_h <= 0:
+            return
+
+        card_width = min(available_w / 2.0, (available_h / 2.0) / self._card_aspect)
+        card_height = card_width * self._card_aspect
+
+        cx = self.card_area.width / 2.0
+        cy = self.card_area.height / 2.0
+        dx = card_width / 2.0 + spacing / 2.0
+        dy = card_height / 2.0 + spacing / 2.0
+
+        positions = {
+            (VP.VP2, 0): (-dx, dy),
+            (VP.VP2, 1): (dx, dy),
+            (VP.VP1, 0): (-dx, -dy),
+            (VP.VP1, 1): (dx, -dy),
+        }
+
+        for key, widget in self.card_widgets.items():
+            offset_x, offset_y = positions.get(key, (0, 0))
+            widget.size = (card_width, card_height)
+            widget.center = (cx + offset_x, cy + offset_y)
+
     def _img_for_value(self, val: Optional[int]) -> str:
         if val is None:
             return self.img_back
@@ -443,6 +656,54 @@ class TwoPlayerUI(BoxLayout):
             return (vp_p2, 1)
         return None
 
+    def _cards_for_vp(self, vp: VP) -> Tuple[int, int]:
+        if not self.engine:
+            return (0, 0)
+        plan = self.engine.current.plan
+        return plan.vp1_cards if vp == VP.VP1 else plan.vp2_cards
+
+    def _category_for_cards(self, cards: Tuple[int, int]) -> Optional[SignalLevel]:
+        total = sum(cards)
+        if total == 19:
+            return SignalLevel.HOCH
+        if total in (16, 17, 18):
+            return SignalLevel.MITTEL
+        if total in (14, 15):
+            return SignalLevel.TIEF
+        return None
+
+    def _info_text_for_vp(self, vp: VP, st: Dict[str, Any], rs) -> str:
+        lines = []
+        role_label = "Spieler 1" if st["roles"]["P1"] == vp.value else "Spieler 2"
+        lines.append(f"Du bist {role_label}")
+
+        if rs.p1_signal:
+            sig_text = rs.p1_signal.value.capitalize()
+            if rs.roles.p1_is == vp:
+                lines.append(f"DEINE WAHL: {sig_text}")
+            else:
+                lines.append(f"ANDERER SPIELER: {sig_text}")
+
+        if rs.p2_call:
+            call_text = rs.p2_call.value.capitalize()
+            if rs.roles.p2_is == vp:
+                lines.append(f"DEINE WAHL: {call_text}")
+            else:
+                lines.append(f"ANDERER SPIELER: {call_text}")
+
+        phase = st.get("phase")
+        if phase in ("REVEAL_SCORE", "ROUND_DONE"):
+            winner = st.get("winner")
+            if winner:
+                winner_vp = rs.roles.p1_is if winner == Player.P1.value else rs.roles.p2_is
+                lines.append("GEWONNEN" if winner_vp == vp else "VERLOREN")
+            else:
+                reason = st.get("outcome_reason", "")
+                if "Unentschieden" in reason:
+                    lines.append("UNENTSCHIEDEN")
+
+        return "\n".join(lines)
+
     # ===== Actions =====
     def _start_or_next_for_vp(self, vp: VP):
         if not self.engine:
@@ -455,7 +716,7 @@ class TwoPlayerUI(BoxLayout):
             elif st["phase"] == "ROUND_DONE":
                 self.engine.click_next_round(player)
         except Exception as e:
-            self.lbl_info.text = f"Start/Next-Fehler ({vp.value}): {e}"
+            self.bottom_detail_label.text = f"Start/Next-Fehler ({vp.value}): {e}"
         self.refresh()
 
     def _reveal(self, vp: VP, idx: int):
@@ -465,7 +726,7 @@ class TwoPlayerUI(BoxLayout):
             p = self._player_for_vp(vp)
             self.engine.click_reveal_card(p, idx)
         except Exception as e:
-            self.lbl_info.text = f"Reveal-Fehler ({vp.value} K{idx+1}): {e}"
+            self.bottom_detail_label.text = f"Reveal-Fehler ({vp.value} K{idx+1}): {e}"
         self.refresh()
 
     def _signal_from_vp(self, vp: VP, level: SignalLevel):
@@ -477,7 +738,7 @@ class TwoPlayerUI(BoxLayout):
         try:
             self.engine.p1_signal(level)
         except Exception as e:
-            self.lbl_info.text = f"Signal-Fehler ({vp.value}): {e}"
+            self.bottom_detail_label.text = f"Signal-Fehler ({vp.value}): {e}"
         self.refresh()
 
     def _call_from_vp(self, vp: VP, call: Call):
@@ -495,60 +756,27 @@ class TwoPlayerUI(BoxLayout):
         try:
             self.engine.p2_call(call, p1_hat_wahrheit_gesagt=truth)
         except Exception as e:
-            self.lbl_info.text = f"Call-Fehler ({vp.value}): {e}"
+            self.bottom_detail_label.text = f"Call-Fehler ({vp.value}): {e}"
         self.refresh()
 
     # ===== Refresh =====
     def refresh(self):
         if self.in_transition:
-            self.lbl_status.text = self.transition_message or "Blockpause"
-            self.lbl_roles.text = ""
-            self.lbl_next.text = "Nächster Zug: –"
-            self.lbl_info.text = self.transition_message
-            self.lbl_points.text = ""
-            for btn in [
-                self.btn_start_vp1, self.btn_start_vp2,
-                self.btn_vp1_c1, self.btn_vp1_c2,
-                self.btn_vp2_c1, self.btn_vp2_c2,
-                self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t,
-                self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t,
-                self.btn_call1_truth, self.btn_call1_bluff,
-                self.btn_call2_truth, self.btn_call2_bluff,
-            ]:
-                btn.disabled = True
-            for img in [self.vp1_img1, self.vp1_img2, self.vp2_img1, self.vp2_img2]:
-                img.source = self.img_back
-                img.reload()
-            for img in [self.mid_vp1_1, self.mid_vp1_2, self.mid_vp2_1, self.mid_vp2_2]:
-                img.source = ""
-                img.reload()
             return
 
         if not self.engine:
-            self.lbl_status.text = "Session wählen"
-            self.lbl_roles.text = ""
-            self.lbl_next.text = "Nächster Zug: –"
-            self.lbl_info.text = "Bitte Sessiondaten bestätigen."
-            self.lbl_points.text = ""
-            self.btn_start_vp1.disabled = True
-            self.btn_start_vp2.disabled = True
-            self.btn_vp1_c1.disabled = True
-            self.btn_vp1_c2.disabled = True
-            self.btn_vp2_c1.disabled = True
-            self.btn_vp2_c2.disabled = True
-            for btn in [
-                self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t,
-                self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t,
-                self.btn_call1_truth, self.btn_call1_bluff,
-                self.btn_call2_truth, self.btn_call2_bluff,
-            ]:
-                btn.disabled = True
-            for img in [self.vp1_img1, self.vp1_img2, self.vp2_img1, self.vp2_img2]:
-                img.source = self.img_back
-                img.reload()
-            for img in [self.mid_vp1_1, self.mid_vp1_2, self.mid_vp2_1, self.mid_vp2_2]:
-                img.source = ""
-                img.reload()
+            self.top_info_label.text = "Session vorbereiten"
+            self.bottom_info_label.text = "Bitte Sessiondaten bestätigen."
+            self.bottom_detail_label.text = ""
+            for panel in (self.vp1_panel, self.vp2_panel):
+                panel.set_play_state(False)
+                panel.set_signal_state(False, None)
+                panel.set_call_state(False, None)
+                panel.set_score("")
+                panel.set_category(None)
+            for widget in self.card_widgets.values():
+                widget.set_card(None, False)
+                widget.set_interactive(False)
             return
 
         st = self.engine.get_public_state()
@@ -557,92 +785,70 @@ class TwoPlayerUI(BoxLayout):
             return
 
         rs = self.engine.current
+        ph = st["phase"]
 
-        self.lbl_status.text = f"Runde {st['round_index']+1} – Phase: {st['phase']}"
-        self.lbl_roles.text = f"Rollen: S1={st['roles']['P1']} | S2={st['roles']['P2']}"
+        self.top_info_label.text = self._info_text_for_vp(VP.VP2, st, rs)
+        self.bottom_info_label.text = self._info_text_for_vp(VP.VP1, st, rs)
+
         outcome = st.get("outcome_reason")
-        if outcome:
-            self.lbl_info.text = outcome
-        else:
-            self.lbl_info.text = self.session_message
+        self.bottom_detail_label.text = outcome or self.session_message
 
         scores = st.get("scores")
         if scores:
-            self.lbl_points.text = (
-                f"Punkte – VP1: {scores.get('VP1', '')} | VP2: {scores.get('VP2', '')}"
-            )
+            self.vp1_panel.set_score(f"{scores.get('VP1', '')} Punkte")
+            self.vp2_panel.set_score(f"{scores.get('VP2', '')} Punkte")
         else:
-            self.lbl_points.text = ""
+            self.vp1_panel.set_score("")
+            self.vp2_panel.set_score("")
 
-        # S1/S2-Beschriftung korrekt je Seite
         is_vp1_p1 = (st["roles"]["P1"] == "VP1")
         is_vp2_p1 = (st["roles"]["P1"] == "VP2")
-        self.lbl_vp1.text = f"VP1 ({'S1' if is_vp1_p1 else 'S2'})"
-        self.lbl_vp2.text = f"VP2 ({'S1' if is_vp2_p1 else 'S2'})"
 
-        ph = st["phase"]
-
-        # Start/Next-Buttons (aktiv, bis jeweilige Seite geklickt hat)
         vp1_ready_start = st["p1_ready"] if is_vp1_p1 else st["p2_ready"]
-        vp1_ready_next  = st["next_ready_p1"] if is_vp1_p1 else st["next_ready_p2"]
-        self.btn_start_vp1.text = "Start (VP1)" if ph == "WAITING_START" else "Weiter (VP1)"
-        self.btn_start_vp1.disabled = not ((ph == "WAITING_START" and not vp1_ready_start) or
-                                           (ph == "ROUND_DONE" and not vp1_ready_next))
+        vp1_ready_next = st["next_ready_p1"] if is_vp1_p1 else st["next_ready_p2"]
+        enable_play_vp1 = (ph == "WAITING_START" and not vp1_ready_start) or (
+            ph == "ROUND_DONE" and not vp1_ready_next
+        )
+        self.vp1_panel.set_play_state(enable_play_vp1)
 
         vp2_ready_start = st["p1_ready"] if is_vp2_p1 else st["p2_ready"]
-        vp2_ready_next  = st["next_ready_p1"] if is_vp2_p1 else st["next_ready_p2"]
-        self.btn_start_vp2.text = "Start (VP2)" if ph == "WAITING_START" else "Weiter (VP2)"
-        self.btn_start_vp2.disabled = not ((ph == "WAITING_START" and not vp2_ready_start) or
-                                           (ph == "ROUND_DONE" and not vp2_ready_next))
+        vp2_ready_next = st["next_ready_p1"] if is_vp2_p1 else st["next_ready_p2"]
+        enable_play_vp2 = (ph == "WAITING_START" and not vp2_ready_start) or (
+            ph == "ROUND_DONE" and not vp2_ready_next
+        )
+        self.vp2_panel.set_play_state(enable_play_vp2)
 
-        # --- Reveal-Buttons: nur der ERWARTETE Schritt ist aktiv ---
-        exp = self._expected_reveal()
-        if exp is None:
-            self.lbl_next.text = "Nächster Zug: –"
-            self.btn_vp1_c1.disabled = True
-            self.btn_vp1_c2.disabled = True
-            self.btn_vp2_c1.disabled = True
-            self.btn_vp2_c2.disabled = True
-        else:
-            exp_vp, exp_idx = exp
-            self.lbl_next.text = f"Nächster Zug: {exp_vp.value} • Karte {exp_idx+1}"
-            self.btn_vp1_c1.disabled = not (ph == "DEALING" and exp_vp == VP.VP1 and exp_idx == 0)
-            self.btn_vp1_c2.disabled = not (ph == "DEALING" and exp_vp == VP.VP1 and exp_idx == 1)
-            self.btn_vp2_c1.disabled = not (ph == "DEALING" and exp_vp == VP.VP2 and exp_idx == 0)
-            self.btn_vp2_c2.disabled = not (ph == "DEALING" and exp_vp == VP.VP2 and exp_idx == 1)
+        enable_sig_vp1 = (ph == "SIGNAL_WAIT" and is_vp1_p1 and rs.p1_signal is None)
+        selected_sig_vp1 = rs.p1_signal if rs.roles.p1_is == VP.VP1 else None
+        self.vp1_panel.set_signal_state(enable_sig_vp1, selected_sig_vp1)
 
-        # Signal/Call je Seite abhängig von der Rolle
-        enable_sig_vp1 = (ph == "SIGNAL_WAIT" and is_vp1_p1)
-        enable_call_vp1 = (ph == "CALL_WAIT" and not is_vp1_p1)
-        for btn in [self.btn_sig1_h, self.btn_sig1_m, self.btn_sig1_t]:
-            btn.disabled = not enable_sig_vp1
-        self.btn_call1_truth.disabled = self.btn_call1_bluff.disabled = not enable_call_vp1
+        enable_sig_vp2 = (ph == "SIGNAL_WAIT" and is_vp2_p1 and rs.p1_signal is None)
+        selected_sig_vp2 = rs.p1_signal if rs.roles.p1_is == VP.VP2 else None
+        self.vp2_panel.set_signal_state(enable_sig_vp2, selected_sig_vp2)
 
-        enable_sig_vp2 = (ph == "SIGNAL_WAIT" and is_vp2_p1)
-        enable_call_vp2 = (ph == "CALL_WAIT" and not is_vp2_p1)
-        for btn in [self.btn_sig2_h, self.btn_sig2_m, self.btn_sig2_t]:
-            btn.disabled = not enable_sig_vp2
-        self.btn_call2_truth.disabled = self.btn_call2_bluff.disabled = not enable_call_vp2
+        enable_call_vp1 = (ph == "CALL_WAIT" and rs.roles.p2_is == VP.VP1 and rs.p2_call is None)
+        selected_call_vp1 = rs.p2_call if rs.roles.p2_is == VP.VP1 else None
+        self.vp1_panel.set_call_state(enable_call_vp1, selected_call_vp1)
 
-        # Karten (eigene) links/rechts anzeigen
-        v1_c1, v1_c2 = rs.plan.vp1_cards
-        v2_c1, v2_c2 = rs.plan.vp2_cards
+        enable_call_vp2 = (ph == "CALL_WAIT" and rs.roles.p2_is == VP.VP2 and rs.p2_call is None)
+        selected_call_vp2 = rs.p2_call if rs.roles.p2_is == VP.VP2 else None
+        self.vp2_panel.set_call_state(enable_call_vp2, selected_call_vp2)
 
-        show_mid = ph in ("REVEAL_SCORE", "ROUND_DONE")  # ab Reveal beide Hände sicher zeigen
+        self.vp1_panel.set_category(self._category_for_cards(self._cards_for_vp(VP.VP1)))
+        self.vp2_panel.set_category(self._category_for_cards(self._cards_for_vp(VP.VP2)))
 
-        self.vp1_img1.source = self._img_for_value(v1_c1) if (self._revealed(VP.VP1, 0) or show_mid) else self.img_back
-        self.vp1_img2.source = self._img_for_value(v1_c2) if (self._revealed(VP.VP1, 1) or show_mid) else self.img_back
-        self.vp2_img1.source = self._img_for_value(v2_c1) if (self._revealed(VP.VP2, 0) or show_mid) else self.img_back
-        self.vp2_img2.source = self._img_for_value(v2_c2) if (self._revealed(VP.VP2, 1) or show_mid) else self.img_back
+        show_mid = ph in ("REVEAL_SCORE", "ROUND_DONE")
+        expected = self._expected_reveal()
 
-        # WICHTIG: Bilder neu laden (Cache umgehen)
-        self.vp1_img1.reload(); self.vp1_img2.reload(); self.vp2_img1.reload(); self.vp2_img2.reload()
-
-        # Mitte: beide Hände nach Call
-        self.mid_vp1_1.source = self._img_for_value(v1_c1) if show_mid else ""
-        self.mid_vp1_2.source = self._img_for_value(v1_c2) if show_mid else ""
-        self.mid_vp2_1.source = self._img_for_value(v2_c1) if show_mid else ""
-        self.mid_vp2_2.source = self._img_for_value(v2_c2) if show_mid else ""
+        for (vp, idx), widget in self.card_widgets.items():
+            cards = self._cards_for_vp(vp)
+            value = cards[idx] if cards else None
+            face_up = show_mid or self._revealed(vp, idx)
+            widget.set_card(value, face_up)
+            enable = ph == "DEALING" and expected is not None and expected == (vp, idx)
+            widget.set_interactive(enable and not show_mid)
+            if not face_up and not enable:
+                widget.opacity = 0.7
 
 
 class TouchGameApp(App):
