@@ -25,6 +25,7 @@ from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.textinput import TextInput
 import os
+import csv
 import itertools
 from pathlib import Path
 
@@ -365,6 +366,19 @@ class TabletopRoot(FloatLayout):
         }
         self.card_cycle = itertools.cycle(['7.png', '8.png', '9.png', '10.png', '11.png'])
 
+        self.blocks = self.load_blocks()
+        self.current_block_idx = 0
+        self.current_round_idx = 0
+        self.current_block_info = None
+        self.round_in_block = 1
+        self.in_block_pause = False
+        self.pause_message = ''
+        self.session_finished = False
+        self.current_round_has_stake = False
+        self.score_state = None
+        self.score_state_block = None
+        self.outcome_score_applied = False
+
         self.update_layout()
         self._update_outcome_labels()
 
@@ -521,6 +535,152 @@ class TabletopRoot(FloatLayout):
         for lbl in self.outcome_labels.values():
             lbl._update_transform()
 
+    # --- Datenquellen & Hilfsfunktionen ---
+    def load_blocks(self):
+        order = [
+            (1, 'Paare1.csv', False),
+            (2, 'Paare3.csv', True),
+            (3, 'Paare2.csv', False),
+            (4, 'Paare4.csv', True),
+        ]
+        blocks = []
+        for index, filename, payout in order:
+            path = Path(ROOT) / filename
+            rounds = self.load_csv_rounds(path)
+            blocks.append({
+                'index': index,
+                'csv': filename,
+                'path': path,
+                'rounds': rounds,
+                'payout': payout,
+            })
+        return blocks
+
+    def load_csv_rounds(self, path: Path):
+        rounds = []
+        try:
+            with open(path, newline='', encoding='utf-8') as fp:
+                rows = list(csv.reader(fp))
+        except FileNotFoundError:
+            return rounds
+        except Exception:
+            return rounds
+
+        def parse_cards(row, start, end):
+            values = []
+            for idx in range(start, min(end, len(row))):
+                cell = (row[idx] or '').strip()
+                if not cell:
+                    continue
+                try:
+                    # Einige CSVs enthalten Ganzzahlen ohne Dezimalstellen, andere mit.
+                    values.append(int(float(cell)))
+                except ValueError:
+                    continue
+                if len(values) == 2:
+                    break
+            if len(values) < 2:
+                raise ValueError('Zu wenige Karten')
+            return tuple(values[:2])
+
+        start_idx = 0
+        if rows:
+            try:
+                parse_cards(rows[0], 2, 4)
+                parse_cards(rows[0], 7, 9)
+            except Exception:
+                start_idx = 1
+
+        for row in rows[start_idx:]:
+            if not row or all((cell or '').strip() == '' for cell in row):
+                continue
+            try:
+                vp1_cards = parse_cards(row, 2, 4)
+                vp2_cards = parse_cards(row, 7, 9)
+            except Exception:
+                continue
+            rounds.append({'vp1': vp1_cards, 'vp2': vp2_cards})
+        return rounds
+
+    def value_to_card_path(self, value):
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return ASSETS['cards']['back']
+        filename = f'{number}.png'
+        path = os.path.join(CARD_DIR, filename)
+        return path if os.path.exists(path) else ASSETS['cards']['back']
+
+    def set_cards_from_plan(self, plan):
+        if plan:
+            vp1_cards = plan['vp1']
+            vp2_cards = plan['vp2']
+            self.p1_inner.set_front(self.value_to_card_path(vp1_cards[0]))
+            self.p1_outer.set_front(self.value_to_card_path(vp1_cards[1]))
+            self.p2_inner.set_front(self.value_to_card_path(vp2_cards[0]))
+            self.p2_outer.set_front(self.value_to_card_path(vp2_cards[1]))
+        else:
+            default = ASSETS['cards']['back']
+            for widget in (self.p1_inner, self.p1_outer, self.p2_inner, self.p2_outer):
+                widget.set_front(default)
+
+    def compute_global_round(self):
+        if not self.blocks:
+            return self.round
+        total = 0
+        for idx, block in enumerate(self.blocks):
+            if idx < self.current_block_idx:
+                total += len(block['rounds'])
+        if self.current_block_idx >= len(self.blocks):
+            return max(1, total)
+        return total + self.current_round_idx + 1
+
+    def score_line_text(self):
+        if self.score_state:
+            return f'Spielstand – VP1: {self.score_state[1]} | VP2: {self.score_state[2]}'
+        return 'Spielstand – VP1: - | VP2: -'
+
+    def get_current_plan(self):
+        if not self.blocks or self.session_finished or self.in_block_pause:
+            return None
+        if self.current_block_idx >= len(self.blocks):
+            return None
+        block = self.blocks[self.current_block_idx]
+        rounds = block['rounds']
+        if not rounds:
+            return None
+        if self.current_round_idx >= len(rounds):
+            return None
+        return block, rounds[self.current_round_idx]
+
+    def advance_round_pointer(self):
+        if not self.blocks or self.session_finished:
+            self.round += 1
+            return
+        if self.current_block_idx >= len(self.blocks):
+            self.session_finished = True
+            return
+        block = self.blocks[self.current_block_idx]
+        self.current_round_idx += 1
+        if self.current_round_idx >= len(block['rounds']):
+            completed_block = block
+            self.current_block_idx += 1
+            self.current_round_idx = 0
+            if self.current_block_idx >= len(self.blocks):
+                self.session_finished = True
+                self.in_block_pause = False
+                self.pause_message = 'Alle Blöcke abgeschlossen. Vielen Dank!'
+            else:
+                self.in_block_pause = True
+                next_block = self.blocks[self.current_block_idx]
+                condition = 'Stake' if next_block['payout'] else 'ohne Stake'
+                self.pause_message = (
+                    f'Block {completed_block["index"]} beendet.\n'
+                    'Pause.\n'
+                    f'Weiter mit Block {next_block["index"]} ({condition}).'
+                )
+        self.round = self.compute_global_round()
+
     # --- Logik
     def apply_phase(self):
         # Alles zunächst deaktivieren
@@ -539,7 +699,7 @@ class TabletopRoot(FloatLayout):
 
         # Startbuttons
         start_active = (self.phase in (PH_WAIT_BOTH_START, PH_SHOWDOWN))
-        ready = self.session_configured
+        ready = self.session_configured and not self.session_finished
         self.btn_start_p1.set_live(start_active and ready)
         self.btn_start_p2.set_live(start_active and ready)
 
@@ -568,6 +728,18 @@ class TabletopRoot(FloatLayout):
             self.update_showdown()
 
         # Badge unten
+        badge_parts = [f"Runde {self.round}"]
+        if self.current_block_info:
+            total_rounds = max(1, len(self.current_block_info['rounds']))
+            badge_parts.append(
+                f"Block {self.current_block_info['index']} Runde {self.round_in_block}/{total_rounds}"
+            )
+        elif self.session_finished:
+            badge_parts.append('Experiment beendet')
+        elif self.in_block_pause and self.current_block_idx < len(self.blocks):
+            next_block = self.blocks[self.current_block_idx]
+            badge_parts.append(f"Pause vor Block {next_block['index']}")
+
         role_txt = (
             f"VP1: Spieler {self.role_by_physical[1]}"
             f" · VP2: Spieler {self.role_by_physical[2]}"
@@ -575,10 +747,14 @@ class TabletopRoot(FloatLayout):
         phase_txt = (
             f"P{self.signaler}: Signal · P{self.judge}: Judge"
         )
-        self.round_badge.text = f"Runde {self.round} · {role_txt} · {phase_txt}"
+        badge_parts.append(role_txt)
+        badge_parts.append(phase_txt)
+        self.round_badge.text = " · ".join(part for part in badge_parts if part)
         self.update_info_labels()
 
     def start_pressed(self, who:int):
+        if self.session_finished:
+            return
         if self.phase not in (PH_WAIT_BOTH_START, PH_SHOWDOWN):
             return
         if who == 1:
@@ -593,7 +769,14 @@ class TabletopRoot(FloatLayout):
             # in nächste Phase
             self.p1_pressed = False
             self.p2_pressed = False
-            if self.phase == PH_SHOWDOWN:
+            if self.in_block_pause:
+                self.in_block_pause = False
+                self.pause_message = ''
+                self.setup_round()
+                if not self.session_finished:
+                    self.phase = PH_P1_INNER
+                    self.apply_phase()
+            elif self.phase == PH_SHOWDOWN:
                 self.prepare_next_round(start_immediately=True)
             else:
                 self.phase = PH_P1_INNER
@@ -661,23 +844,47 @@ class TabletopRoot(FloatLayout):
         # Rollen tauschen
         self.signaler, self.judge = self.judge, self.signaler
         self.update_role_assignments()
-        self.round += 1
+        self.advance_round_pointer()
         self.phase = PH_WAIT_BOTH_START
         self.setup_round()
-        if start_immediately:
+        if start_immediately and not self.in_block_pause and not self.session_finished:
             self.phase = PH_P1_INNER
         else:
             self.phase = PH_WAIT_BOTH_START
         self.apply_phase()
 
     def setup_round(self):
-        # neue Karten ziehen
-        next_cards = [next(self.card_cycle) for _ in range(4)]
-        paths = [os.path.join(CARD_DIR, name) for name in next_cards]
-        self.p1_inner.set_front(paths[0])
-        self.p2_inner.set_front(paths[1])
-        self.p1_outer.set_front(paths[2])
-        self.p2_outer.set_front(paths[3])
+        self.outcome_score_applied = False
+        # ggf. leere Blöcke überspringen
+        if self.blocks and not self.session_finished and not self.in_block_pause:
+            while (
+                self.current_block_idx < len(self.blocks)
+                and not self.blocks[self.current_block_idx]['rounds']
+            ):
+                self.current_block_idx += 1
+        plan_info = self.get_current_plan()
+        if plan_info:
+            block, plan = plan_info
+            self.current_block_info = block
+            self.round_in_block = self.current_round_idx + 1
+            self.current_round_has_stake = block['payout']
+            if block['payout'] and self.score_state_block != block['index']:
+                self.score_state = {1: 16, 2: 16}
+                self.score_state_block = block['index']
+            if not block['payout']:
+                self.score_state = None
+                self.score_state_block = None
+            self.set_cards_from_plan(plan)
+            self.round = self.compute_global_round()
+        else:
+            if self.current_block_idx >= len(self.blocks):
+                self.session_finished = True
+            self.current_block_info = None
+            self.round_in_block = 0
+            self.current_round_has_stake = False
+            self.set_cards_from_plan(None)
+            self.round = self.compute_global_round()
+
         for c in (self.p1_inner, self.p1_outer, self.p2_inner, self.p2_outer):
             c.reset()
         # Reset Buttons
@@ -699,11 +906,13 @@ class TabletopRoot(FloatLayout):
             'truthful': None,
             'actual_level': None,
             'signal_choice': None,
-            'judge_choice': None
+            'judge_choice': None,
+            'payout': self.current_round_has_stake,
         }
         self.refresh_center_cards(reveal=False)
         self.update_info_labels()
-        self.log_round_start()
+        if plan_info:
+            self.log_round_start()
 
     def refresh_center_cards(self, reveal: bool):
         if reveal:
@@ -723,11 +932,21 @@ class TabletopRoot(FloatLayout):
     def update_showdown(self):
         # Karten in der Mitte anzeigen
         self.refresh_center_cards(reveal=True)
-        self.compute_outcome()
+        outcome = self.compute_outcome()
+        if (
+            self.current_round_has_stake
+            and self.score_state
+            and not self.outcome_score_applied
+        ):
+            winner = outcome.get('winner') if outcome else None
+            if winner in (1, 2):
+                loser = 1 if winner == 2 else 2
+                self.score_state[winner] += 1
+                self.score_state[loser] -= 1
+                self.outcome_score_applied = True
         self.update_info_labels()
         if self.session_configured:
-            outcome = self.last_outcome or {}
-            self.log_event(None, 'showdown', outcome)
+            self.log_event(None, 'showdown', outcome or {})
 
     def card_value_from_path(self, path: str):
         if not path:
@@ -782,7 +1001,8 @@ class TabletopRoot(FloatLayout):
             'truthful': truthful,
             'actual_level': actual_level,
             'signal_choice': signal_choice,
-            'judge_choice': judge_choice
+            'judge_choice': judge_choice,
+            'payout': self.current_round_has_stake,
         }
         return self.last_outcome
 
@@ -800,9 +1020,10 @@ class TabletopRoot(FloatLayout):
         winner = self.last_outcome.get('winner') if self.last_outcome else None
         if winner is None:
             return '-'
+        payout = self.last_outcome.get('payout') if self.last_outcome else False
         if winner == player:
-            return 'Gewonnen'
-        return 'Verloren'
+            return 'Gewonnen (+1)' if payout else 'Gewonnen'
+        return 'Verloren (-1)' if payout else 'Verloren'
 
     def update_info_labels(self):
         if not self.session_configured:
@@ -813,31 +1034,50 @@ class TabletopRoot(FloatLayout):
                 lbl.text = ''
             return
 
+        score_line = self.score_line_text()
+
+        if self.session_finished:
+            message = self.pause_message or 'Experiment beendet. Vielen Dank!'
+            combined = f"{message}\n{score_line}" if score_line else message
+            self.info_labels['bottom'].text = combined
+            self.info_labels['top'].text = combined
+            self._update_outcome_labels()
+            return
+
+        if self.in_block_pause:
+            message = self.pause_message or 'Pause. Drückt Play, um fortzufahren.'
+            combined = f"{message}\n{score_line}" if score_line else message
+            self.info_labels['bottom'].text = combined
+            self.info_labels['top'].text = combined
+            self._update_outcome_labels()
+            return
+
         self.compute_outcome()
-        choice_role1 = self.describe_player_choice(self.physical_by_role[1])
-        choice_role2 = self.describe_player_choice(self.physical_by_role[2])
-
-        vp1_role = self.role_by_physical[1]
-        vp2_role = self.role_by_physical[2]
-        vp1_role_name = 'Signal' if self.signaler == 1 else 'Judge'
-        vp2_role_name = 'Signal' if self.signaler == 2 else 'Judge'
-
-        bottom_lines = [
-            f'Versuchsperson 1 – aktuell Spieler {vp1_role}',
-            f'Deine Rolle: {vp1_role_name}',
-            f'Wahl Spieler 1: {choice_role1}',
-            f'Wahl Spieler 2: {choice_role2}',
-            f'Ergebnis: {self.result_text(1)}'
-        ]
-        top_lines = [
-            f'Versuchsperson 2 – aktuell Spieler {vp2_role}',
-            f'Deine Rolle: {vp2_role_name}',
-            f'Wahl Spieler 1: {choice_role1}',
-            f'Wahl Spieler 2: {choice_role2}',
-            f'Ergebnis: {self.result_text(2)}'
-        ]
-        self.info_labels['bottom'].text = "\n".join(bottom_lines)
-        self.info_labels['top'].text = "\n".join(top_lines)
+        for player in (1, 2):
+            label_key = 'bottom' if player == 1 else 'top'
+            role_number = self.role_by_physical[player]
+            header = f'Versuchsperson {player} - Spieler {role_number}'
+            own_choice = self.describe_player_choice(player)
+            other_player = 2 if player == 1 else 1
+            other_choice = self.describe_player_choice(other_player)
+            result_line = self.result_text(player)
+            if role_number == 1:
+                lines = [
+                    header,
+                    score_line,
+                    f'Eigene Wahl: {own_choice}',
+                    f'Andere Wahl: {other_choice}',
+                    f'Gewonnen / Verloren: {result_line}',
+                ]
+            else:
+                lines = [
+                    header,
+                    score_line,
+                    f'Andere Wahl: {other_choice}',
+                    f'Eigene Wahl: {own_choice}',
+                    f'Gewonnen oder Verloren: {result_line}',
+                ]
+            self.info_labels[label_key].text = "\n".join(lines)
         self._update_outcome_labels()
 
     def _update_outcome_labels(self):
@@ -972,6 +1212,9 @@ class TabletopRoot(FloatLayout):
             return
         self.log_event(None, 'round_start', {
             'round': self.round,
+            'block': self.current_block_info['index'] if self.current_block_info else None,
+            'round_in_block': self.round_in_block if self.current_block_info else None,
+            'payout': bool(self.current_round_has_stake),
             'signaler': self.signaler,
             'judge': self.judge,
             'vp_roles': self.role_by_physical.copy(),
