@@ -212,8 +212,10 @@ class TabletopRoot(FloatLayout):
         self.signaler = 1
         self.judge = 2
         self.phase = PH_WAIT_BOTH_START
-        self.role_by_physical = {1: 1, 2: 2}
-        self.physical_by_role = {1: 1, 2: 2}
+        # Versuchsperson 1 sitzt immer unten (Spieler 1), Versuchsperson 2 oben (Spieler 2)
+        self._fixed_role_mapping = {1: 1, 2: 2}
+        self.role_by_physical = self._fixed_role_mapping.copy()
+        self.physical_by_role = {role: player for player, role in self.role_by_physical.items()}
         self.session_number = None
         self.session_id = None
         self.logger = None
@@ -1308,10 +1310,10 @@ class TabletopRoot(FloatLayout):
         return (None, None)
 
     def update_role_assignments(self):
-        if self.signaler == 1:
-            self.role_by_physical = {1: 1, 2: 2}
-        else:
-            self.role_by_physical = {1: 2, 2: 1}
+        """Stelle sicher, dass die Versuchspersonen fest ihren Sitzplätzen zugeordnet bleiben."""
+        # Die Sitzordnung ist fix: Spieler 1 unten = VP1, Spieler 2 oben = VP2.
+        # Rollenwechsel (Signaler/Judge) wird separat über self.signaler/self.judge abgebildet.
+        self.role_by_physical = self._fixed_role_mapping.copy()
         self.physical_by_role = {role: player for player, role in self.role_by_physical.items()}
 
     def current_engine_phase(self):
