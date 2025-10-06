@@ -1124,15 +1124,14 @@ class TabletopRoot(FloatLayout):
         judge_choice = self.last_outcome.get('judge_choice')
         if truthful is None or not judge_choice:
             return ''
-        truth_txt = 'Wahres Signal' if truthful else 'Bluff-Signal'
-        judge_mapping = {
-            'wahr': 'Wahrheit angenommen',
-            'bluff': 'Bluff angenommen',
+
+        summary_map = {
+            (True, 'wahr'): 'Richtiges Signal - Wahrheit entdeckt',
+            (True, 'bluff'): 'Richtiges Signal - Bluff irrtümlich',
+            (False, 'bluff'): 'Falsches Signal - Bluff entdeckt',
+            (False, 'wahr'): 'Falsches Signal - Wahrheit irrtümlich angenommen',
         }
-        judge_txt = judge_mapping.get(judge_choice, '')
-        if truth_txt and judge_txt:
-            return f'{truth_txt} - {judge_txt}'
-        return truth_txt or judge_txt
+        return summary_map.get((truthful, judge_choice), '')
 
     def result_line_for_vp(self, vp: int) -> str:
         if not self.last_outcome:
