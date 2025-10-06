@@ -16,7 +16,7 @@ from kivy.app import App
 from kivy.clock import Clock
 from kivy.config import Config
 from kivy.core.window import Window
-from kivy.graphics import Color, Rectangle
+from kivy.graphics import Color, Rectangle, PushMatrix, PopMatrix, Rotate
 from kivy.uix.image import Image
 from kivy.uix.widget import Widget
 from kivy.uix.button import Button
@@ -27,9 +27,6 @@ import itertools
 
 # --- Display fest auf 3840x2160, Vollbild aktivierbar (kommentiere die nächste Zeile, falls du Fenster willst)
 Config.set('graphics', 'fullscreen', 'auto')
-Config.set('graphics', 'width', '3840')
-Config.set('graphics', 'height', '2160')
-Window.size = (3840, 2160)
 
 # --- Konstanten & Assets
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -130,6 +127,13 @@ class IconButton(Button):
         self.background_disabled_normal = asset_pair['stop']
         self.disabled_color = (1,1,1,1)
         self.text = ''  # wir nutzen die Grafik
+        self.rotation_angle = 0
+        with self.canvas.before:
+            self._push_matrix = PushMatrix()
+            self._rotation = Rotate(angle=0, origin=self.center)
+        with self.canvas.after:
+            self._pop_matrix = PopMatrix()
+        self.bind(pos=self._update_transform, size=self._update_transform)
         self.update_visual()
 
     def set_live(self, v: bool):
@@ -149,6 +153,15 @@ class IconButton(Button):
         self.live = False
         self.disabled = True
         self.update_visual()
+
+    def set_rotation(self, angle: float):
+        self.rotation_angle = angle
+        self._update_transform()
+
+    def _update_transform(self, *args):
+        if hasattr(self, '_rotation'):
+            self._rotation.origin = self.center
+            self._rotation.angle = self.rotation_angle
 
     def update_visual(self):
         img = self.asset_pair['live'] if (self.live or self.selected) else self.asset_pair['stop']
@@ -177,21 +190,13 @@ class TabletopRoot(FloatLayout):
     # --- Layout & Elemente
     def on_resize(self, *_):
         self.bg.size = Window.size
+        self.update_layout()
 
     def make_ui(self):
-        W, H = Window.size
-
-        card_size = (420, 640)
-        card_gap = 70
-        corner_margin = 120
-        start_size = (360, 360)
-
         # Start-Buttons links/rechts (für beide Spieler)
         self.btn_start_p1 = IconButton(
             ASSETS['play'],
             size_hint=(None, None),
-            size=start_size,
-            pos=(corner_margin, H/2 - start_size[1]/2)
         )
         self.btn_start_p1.bind(on_release=lambda *_: self.start_pressed(1))
         self.add_widget(self.btn_start_p1)
@@ -199,31 +204,24 @@ class TabletopRoot(FloatLayout):
         self.btn_start_p2 = IconButton(
             ASSETS['play'],
             size_hint=(None, None),
-            size=start_size,
-            pos=(W - corner_margin - start_size[0], H/2 - start_size[1]/2)
         )
         self.btn_start_p2.bind(on_release=lambda *_: self.start_pressed(2))
         self.add_widget(self.btn_start_p2)
 
         # Spielerzonen (je 2 Karten in den Ecken)
-        p1_outer_pos = (corner_margin, corner_margin)
-        p1_inner_pos = (corner_margin + card_size[0] + card_gap, corner_margin)
-        p2_outer_pos = (W - corner_margin - card_size[0], H - corner_margin - card_size[1])
-        p2_inner_pos = (p2_outer_pos[0] - card_size[0] - card_gap, p2_outer_pos[1])
-
-        self.p1_outer = CardWidget(size_hint=(None, None), size=card_size, pos=p1_outer_pos)
+        self.p1_outer = CardWidget(size_hint=(None, None))
         self.p1_outer.bind(on_release=lambda *_: self.tap_card(1, 'outer'))
         self.add_widget(self.p1_outer)
 
-        self.p1_inner = CardWidget(size_hint=(None, None), size=card_size, pos=p1_inner_pos)
+        self.p1_inner = CardWidget(size_hint=(None, None))
         self.p1_inner.bind(on_release=lambda *_: self.tap_card(1, 'inner'))
         self.add_widget(self.p1_inner)
 
-        self.p2_outer = CardWidget(size_hint=(None, None), size=card_size, pos=p2_outer_pos)
+        self.p2_outer = CardWidget(size_hint=(None, None))
         self.p2_outer.bind(on_release=lambda *_: self.tap_card(2, 'outer'))
         self.add_widget(self.p2_outer)
 
-        self.p2_inner = CardWidget(size_hint=(None, None), size=card_size, pos=p2_inner_pos)
+        self.p2_inner = CardWidget(size_hint=(None, None))
         self.p2_inner.bind(on_release=lambda *_: self.tap_card(2, 'inner'))
         self.add_widget(self.p2_inner)
 
@@ -231,61 +229,36 @@ class TabletopRoot(FloatLayout):
         self.signal_buttons = {1: {}, 2: {}}
         self.decision_buttons = {1: {}, 2: {}}
 
-        btn_size = (260, 260)
-        horizontal_gap = 80
-        row_gap = 70
-
-        def row_positions(count: int, base_y: float):
-            row_width = count * btn_size[0] + (count - 1) * horizontal_gap
-            start_x = W/2 - row_width / 2
-            return [(start_x + i * (btn_size[0] + horizontal_gap), base_y) for i in range(count)]
-
-        # Signale Spieler 1 (untere Reihe im Block)
-        p1_signal_y = 560
-        for level, pos in zip(['low', 'mid', 'high'], row_positions(3, p1_signal_y)):
-            btn = IconButton(ASSETS['signal'][level], size_hint=(None, None), size=btn_size, pos=pos)
+        for level in ['low', 'mid', 'high']:
+            btn = IconButton(ASSETS['signal'][level], size_hint=(None, None))
             btn.bind(on_release=lambda _, lvl=level: self.pick_signal(1, lvl))
             self.signal_buttons[1][level] = btn
             self.add_widget(btn)
 
-        # Entscheidungen Spieler 1 (untere Blockreihe)
-        p1_decision_y = p1_signal_y - btn_size[1] - row_gap
-        for choice, pos in zip(['bluff', 'wahr'], row_positions(2, p1_decision_y)):
-            btn = IconButton(ASSETS['decide'][choice], size_hint=(None, None), size=btn_size, pos=pos)
+        for choice in ['bluff', 'wahr']:
+            btn = IconButton(ASSETS['decide'][choice], size_hint=(None, None))
             btn.bind(on_release=lambda _, ch=choice: self.pick_decision(1, ch))
             self.decision_buttons[1][choice] = btn
             self.add_widget(btn)
 
-        # Signale Spieler 2 (obere Blockreihe – gespiegelt)
-        p2_signal_y = H - p1_signal_y - btn_size[1]
-        for level, pos in zip(['low', 'mid', 'high'], row_positions(3, p2_signal_y)):
-            btn = IconButton(ASSETS['signal'][level], size_hint=(None, None), size=btn_size, pos=pos)
+        for level in ['low', 'mid', 'high']:
+            btn = IconButton(ASSETS['signal'][level], size_hint=(None, None))
             btn.bind(on_release=lambda _, lvl=level: self.pick_signal(2, lvl))
             self.signal_buttons[2][level] = btn
             self.add_widget(btn)
 
-        # Entscheidungen Spieler 2 (obere Blockreihe über den Signalen)
-        p2_decision_y = p2_signal_y + btn_size[1] + row_gap
-        for choice, pos in zip(['bluff', 'wahr'], row_positions(2, p2_decision_y)):
-            btn = IconButton(ASSETS['decide'][choice], size_hint=(None, None), size=btn_size, pos=pos)
+        for choice in ['bluff', 'wahr']:
+            btn = IconButton(ASSETS['decide'][choice], size_hint=(None, None))
             btn.bind(on_release=lambda _, ch=choice: self.pick_decision(2, ch))
             self.decision_buttons[2][choice] = btn
             self.add_widget(btn)
 
         # Showdown-Karten in der Mitte (immer sichtbar, zuerst verdeckt)
-        center_gap_x = 90
-        center_gap_y = 60
-        center_card_size = (380, 560)
-        left_x = W/2 - center_card_size[0] - center_gap_x / 2
-        right_x = W/2 + center_gap_x / 2
-        bottom_y = H/2 - center_card_size[1] - center_gap_y / 2
-        top_y = H/2 + center_gap_y / 2
-
         self.center_cards = {
-            1: [Image(size_hint=(None, None), size=center_card_size, pos=(left_x, bottom_y), allow_stretch=True, keep_ratio=True),
-                Image(size_hint=(None, None), size=center_card_size, pos=(right_x, bottom_y), allow_stretch=True, keep_ratio=True)],
-            2: [Image(size_hint=(None, None), size=center_card_size, pos=(left_x, top_y), allow_stretch=True, keep_ratio=True),
-                Image(size_hint=(None, None), size=center_card_size, pos=(right_x, top_y), allow_stretch=True, keep_ratio=True)],
+            1: [Image(size_hint=(None, None), allow_stretch=True, keep_ratio=True),
+                Image(size_hint=(None, None), allow_stretch=True, keep_ratio=True)],
+            2: [Image(size_hint=(None, None), allow_stretch=True, keep_ratio=True),
+                Image(size_hint=(None, None), allow_stretch=True, keep_ratio=True)],
         }
         for imgs in self.center_cards.values():
             for img in imgs:
@@ -294,29 +267,27 @@ class TabletopRoot(FloatLayout):
         # Showdown-Label (Mitte)
         self.showdown_label = Label(
             text='',
-            font_size=64,
             color=(1, 1, 1, 1),
             size_hint=(None, None),
-            size=(1600, 220),
-            pos=(W/2 - 800, H/2 - 110)
+            halign='center',
+            valign='middle'
         )
         self.add_widget(self.showdown_label)
 
         # Rundenbadge unten Mitte
         self.round_badge = Label(
             text='',
-            font_size=40,
             color=(1, 1, 1, 1),
             size_hint=(None, None),
-            size=(1400, 70),
-            pos=(W/2 - 700, 30)
+            halign='center',
+            valign='middle'
         )
         self.add_widget(self.round_badge)
 
         # Statusanzeigen
         self.status_labels = {
-            1: Label(text='', font_size=40, color=(1, 1, 1, 1), size_hint=(None, None), size=(900, 240), pos=(corner_margin, corner_margin + card_size[1] + 60)),
-            2: Label(text='', font_size=40, color=(1, 1, 1, 1), size_hint=(None, None), size=(900, 240), pos=(W - corner_margin - 900, p2_inner_pos[1] - 280)),
+            1: Label(text='', color=(1, 1, 1, 1), size_hint=(None, None), halign='left', valign='top'),
+            2: Label(text='', color=(1, 1, 1, 1), size_hint=(None, None), halign='left', valign='top'),
         }
         for label in self.status_labels.values():
             self.add_widget(label)
@@ -328,6 +299,141 @@ class TabletopRoot(FloatLayout):
         self.player_decisions = {1: None, 2: None}
         self.status_lines = {1: [], 2: []}
         self.card_cycle = itertools.cycle(['7.png', '8.png', '9.png', '10.png', '11.png'])
+
+        self.update_layout()
+
+    def update_layout(self):
+        W, H = Window.size
+        base_w, base_h = 3840.0, 2160.0
+        scale = min(W / base_w if base_w else 1, H / base_h if base_h else 1)
+
+        self.bg.pos = (0, 0)
+        self.bg.size = (W, H)
+
+        corner_margin = 120 * scale
+        card_width, card_height = 420 * scale, 640 * scale
+        card_gap = 70 * scale
+        start_size = (360 * scale, 360 * scale)
+
+        # Start buttons
+        self.btn_start_p1.size = start_size
+        self.btn_start_p1.pos = (corner_margin, H / 2 - start_size[1] / 2)
+        self.btn_start_p1.set_rotation(0)
+
+        self.btn_start_p2.size = start_size
+        self.btn_start_p2.pos = (W - corner_margin - start_size[0], H / 2 - start_size[1] / 2)
+        self.btn_start_p2.set_rotation(180)
+
+        # Cards positions
+        p1_outer_pos = (corner_margin, corner_margin)
+        p1_inner_pos = (corner_margin + card_width + card_gap, corner_margin)
+        self.p1_outer.size = (card_width, card_height)
+        self.p1_outer.pos = p1_outer_pos
+        self.p1_inner.size = (card_width, card_height)
+        self.p1_inner.pos = p1_inner_pos
+
+        p2_outer_pos = (W - corner_margin - card_width, H - corner_margin - card_height)
+        p2_inner_pos = (p2_outer_pos[0] - card_width - card_gap, p2_outer_pos[1])
+        self.p2_outer.size = (card_width, card_height)
+        self.p2_outer.pos = p2_outer_pos
+        self.p2_inner.size = (card_width, card_height)
+        self.p2_inner.pos = p2_inner_pos
+
+        # Button stacks
+        btn_width, btn_height = 260 * scale, 260 * scale
+        vertical_gap = 40 * scale
+        horizontal_gap = 60 * scale
+
+        # Player 1 (bottom right)
+        signal_x = W - corner_margin - btn_width
+        base_y = corner_margin
+        for idx, level in enumerate(['low', 'mid', 'high']):
+            btn = self.signal_buttons[1][level]
+            btn.size = (btn_width, btn_height)
+            btn.pos = (signal_x, base_y + idx * (btn_height + vertical_gap))
+            btn.set_rotation(0)
+
+        decision_x = signal_x - horizontal_gap - btn_width
+        for idx, choice in enumerate(['bluff', 'wahr']):
+            btn = self.decision_buttons[1][choice]
+            btn.size = (btn_width, btn_height)
+            btn.pos = (decision_x, base_y + idx * (btn_height + vertical_gap))
+            btn.set_rotation(0)
+
+        # Player 2 (top left)
+        signal2_x = corner_margin
+        top_y = H - corner_margin
+        for idx, level in enumerate(['low', 'mid', 'high']):
+            btn = self.signal_buttons[2][level]
+            btn.size = (btn_width, btn_height)
+            btn.pos = (signal2_x, top_y - btn_height - idx * (btn_height + vertical_gap))
+            btn.set_rotation(180)
+
+        decision2_x = signal2_x + btn_width + horizontal_gap
+        for idx, choice in enumerate(['bluff', 'wahr']):
+            btn = self.decision_buttons[2][choice]
+            btn.size = (btn_width, btn_height)
+            btn.pos = (decision2_x, top_y - btn_height - idx * (btn_height + vertical_gap))
+            btn.set_rotation(180)
+
+        # Center cards
+        center_card_width, center_card_height = 380 * scale, 560 * scale
+        center_gap_x = 90 * scale
+        center_gap_y = 60 * scale
+        left_x = W / 2 - center_card_width - center_gap_x / 2
+        right_x = W / 2 + center_gap_x / 2
+        bottom_y = H / 2 - center_card_height - center_gap_y / 2
+        top_y_center = H / 2 + center_gap_y / 2
+
+        for idx, img in enumerate(self.center_cards[1]):
+            img.size = (center_card_width, center_card_height)
+        self.center_cards[1][0].pos = (left_x, bottom_y)
+        self.center_cards[1][1].pos = (right_x, bottom_y)
+
+        for idx, img in enumerate(self.center_cards[2]):
+            img.size = (center_card_width, center_card_height)
+        self.center_cards[2][0].pos = (left_x, top_y_center)
+        self.center_cards[2][1].pos = (right_x, top_y_center)
+
+        # Showdown label
+        label_width, label_height = 1600 * scale, 220 * scale
+        self.showdown_label.size = (label_width, label_height)
+        self.showdown_label.font_size = 64 * scale if scale else 64
+        self.showdown_label.pos = (W / 2 - label_width / 2, H / 2 - label_height / 2)
+        self.showdown_label.text_size = (label_width, label_height)
+
+        # Round badge
+        badge_width, badge_height = 1400 * scale, 70 * scale
+        self.round_badge.size = (badge_width, badge_height)
+        self.round_badge.font_size = 40 * scale if scale else 40
+        self.round_badge.pos = (W / 2 - badge_width / 2, corner_margin / 2)
+        self.round_badge.text_size = (badge_width, badge_height)
+
+        # Status labels
+        status_width, status_height = 900 * scale, 240 * scale
+        status_font = 40 * scale if scale else 40
+
+        label1 = self.status_labels[1]
+        label1.size = (status_width, status_height)
+        label1.font_size = status_font
+        label1.pos = (corner_margin, self.p1_outer.top + vertical_gap)
+        label1.text_size = (status_width, status_height)
+
+        label2 = self.status_labels[2]
+        label2.size = (status_width, status_height)
+        label2.font_size = status_font
+        label2.pos = (W - corner_margin - status_width, self.p2_inner.y - status_height - vertical_gap)
+        label2.text_size = (status_width, status_height)
+
+        # Refresh transforms after layout changes
+        for buttons in self.signal_buttons.values():
+            for btn in buttons.values():
+                btn._update_transform()
+        for buttons in self.decision_buttons.values():
+            for btn in buttons.values():
+                btn._update_transform()
+        self.btn_start_p1._update_transform()
+        self.btn_start_p2._update_transform()
 
     # --- Logik
     def apply_phase(self):
