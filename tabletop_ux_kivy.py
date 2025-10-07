@@ -15,6 +15,7 @@
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.config import Config
+from kivy.core.image import Image as CoreImage
 from kivy.core.window import Window
 from kivy.graphics import Color, Rectangle, PushMatrix, PopMatrix, Rotate
 from kivy.uix.image import Image
@@ -42,6 +43,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 UX_DIR = os.path.join(ROOT, 'UX')
 CARD_DIR = os.path.join(ROOT, 'Karten')
 
+BACKGROUND_IMAGE = os.path.join(UX_DIR, 'Aruco.png')
+
 ASSETS = {
     'play': {
         'live':  os.path.join(UX_DIR, 'play_live.png'),
@@ -61,6 +64,16 @@ ASSETS = {
         'back_stop': os.path.join(CARD_DIR, 'back_stop.png'),
     }
 }
+
+
+def resolve_background_texture():
+    if not os.path.exists(BACKGROUND_IMAGE):
+        return None
+    try:
+        return CoreImage(BACKGROUND_IMAGE).texture
+    except Exception:
+        return None
+
 
 # --- Phasen der Runde
 PH_WAIT_BOTH_START = 'WAIT_BOTH_START'
@@ -205,9 +218,14 @@ class IconButton(Button):
 class TabletopRoot(FloatLayout):
     def __init__(self, **kw):
         super().__init__(**kw)
+        self.bg_texture = resolve_background_texture()
         with self.canvas.before:
-            Color(0.75, 0.75, 0.75, 1)  # #BFBFBF
-            self.bg = Rectangle(pos=(0,0), size=Window.size)
+            if self.bg_texture:
+                Color(1, 1, 1, 1)
+                self.bg = Rectangle(pos=(0, 0), size=Window.size, texture=self.bg_texture)
+            else:
+                Color(0.75, 0.75, 0.75, 1)  # #BFBFBF fallback
+                self.bg = Rectangle(pos=(0, 0), size=Window.size)
         Window.bind(on_resize=self.on_resize)
 
         self.round = 1
@@ -240,6 +258,8 @@ class TabletopRoot(FloatLayout):
     # --- Layout & Elemente
     def on_resize(self, *_):
         self.bg.size = Window.size
+        if self.bg_texture:
+            self.bg.texture = self.bg_texture
         self.update_layout()
 
     def make_ui(self):
