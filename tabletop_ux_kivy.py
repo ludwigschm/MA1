@@ -15,6 +15,7 @@
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.config import Config
+from kivy.core.image import Image as CoreImage
 from kivy.core.window import Window
 from kivy.graphics import Color, Rectangle, PushMatrix, PopMatrix, Rotate
 from kivy.uix.image import Image
@@ -42,6 +43,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 UX_DIR = os.path.join(ROOT, 'UX')
 CARD_DIR = os.path.join(ROOT, 'Karten')
 
+BACKGROUND_IMAGE = os.path.join(UX_DIR, 'Aruco.png')
+
 ASSETS = {
     'play': {
         'live':  os.path.join(UX_DIR, 'play_live.png'),
@@ -61,6 +64,16 @@ ASSETS = {
         'back_stop': os.path.join(CARD_DIR, 'back_stop.png'),
     }
 }
+
+
+def resolve_background_texture():
+    if not os.path.exists(BACKGROUND_IMAGE):
+        return None
+    try:
+        return CoreImage(BACKGROUND_IMAGE).texture
+    except Exception:
+        return None
+
 
 # --- Phasen der Runde
 PH_WAIT_BOTH_START = 'WAIT_BOTH_START'
@@ -205,9 +218,14 @@ class IconButton(Button):
 class TabletopRoot(FloatLayout):
     def __init__(self, **kw):
         super().__init__(**kw)
+        self.bg_texture = resolve_background_texture()
         with self.canvas.before:
-            Color(0.75, 0.75, 0.75, 1)  # #BFBFBF
-            self.bg = Rectangle(pos=(0,0), size=Window.size)
+            if self.bg_texture:
+                Color(1, 1, 1, 1)
+                self.bg = Rectangle(pos=(0, 0), size=Window.size, texture=self.bg_texture)
+            else:
+                Color(0.75, 0.75, 0.75, 1)  # #BFBFBF fallback
+                self.bg = Rectangle(pos=(0, 0), size=Window.size)
         Window.bind(on_resize=self.on_resize)
 
         self.round = 1
@@ -240,6 +258,8 @@ class TabletopRoot(FloatLayout):
     # --- Layout & Elemente
     def on_resize(self, *_):
         self.bg.size = Window.size
+        if self.bg_texture:
+            self.bg.texture = self.bg_texture
         self.update_layout()
 
     def make_ui(self):
@@ -376,14 +396,17 @@ class TabletopRoot(FloatLayout):
         W, H = Window.size
         base_w, base_h = 3840.0, 2160.0
         scale = min(W / base_w if base_w else 1, H / base_h if base_h else 1)
+        size_factor = 0.8  # reduce symbol sizes by ~20% while keeping layout anchors
 
         self.bg.pos = (0, 0)
         self.bg.size = (W, H)
 
         corner_margin = 120 * scale
-        card_width, card_height = 420 * scale, 640 * scale
+        base_card_width, base_card_height = 420 * scale, 640 * scale
+        card_width, card_height = base_card_width * size_factor, base_card_height * size_factor
         card_gap = 70 * scale
-        start_size = (360 * scale, 360 * scale)
+        base_start_size = (360 * scale, 360 * scale)
+        start_size = (base_start_size[0] * size_factor, base_start_size[1] * size_factor)
 
         # Start buttons
         self.btn_start_p1.size = start_size
@@ -397,28 +420,29 @@ class TabletopRoot(FloatLayout):
 
         # Cards positions
         p1_outer_pos = (corner_margin, corner_margin)
-        p1_inner_pos = (corner_margin + card_width + card_gap, corner_margin)
+        p1_inner_pos = (corner_margin + base_card_width + card_gap, corner_margin)
         self.p1_outer.size = (card_width, card_height)
         self.p1_outer.pos = p1_outer_pos
         self.p1_inner.size = (card_width, card_height)
         self.p1_inner.pos = p1_inner_pos
 
-        p2_outer_pos = (W - corner_margin - card_width, H - corner_margin - card_height)
-        p2_inner_pos = (p2_outer_pos[0] - card_width - card_gap, p2_outer_pos[1])
+        p2_outer_pos = (W - corner_margin - base_card_width, H - corner_margin - base_card_height)
+        p2_inner_pos = (p2_outer_pos[0] - base_card_width - card_gap, p2_outer_pos[1])
         self.p2_outer.size = (card_width, card_height)
         self.p2_outer.pos = p2_outer_pos
         self.p2_inner.size = (card_width, card_height)
         self.p2_inner.pos = p2_inner_pos
 
         # Button stacks
-        btn_width, btn_height = 260 * scale, 260 * scale
+        base_btn_width, base_btn_height = 260 * scale, 260 * scale
+        btn_width, btn_height = base_btn_width * size_factor, base_btn_height * size_factor
         vertical_gap = 40 * scale
         horizontal_gap = 60 * scale
         cluster_shift = 620 * scale
         vertical_offset = 140 * scale
 
         # Player 1 (bottom right)
-        signal_x = W - corner_margin - btn_width - cluster_shift
+        signal_x = W - corner_margin - base_btn_width - cluster_shift
         base_y = corner_margin + vertical_offset
         for idx, level in enumerate(['low', 'mid', 'high']):
             btn = self.signal_buttons[1][level]
@@ -426,7 +450,7 @@ class TabletopRoot(FloatLayout):
             btn.pos = (signal_x, base_y + idx * (btn_height + vertical_gap))
             btn.set_rotation(0)
 
-        decision_x = signal_x - horizontal_gap - btn_width
+        decision_x = signal_x - horizontal_gap - base_btn_width
         for idx, choice in enumerate(['bluff', 'wahr']):
             btn = self.decision_buttons[1][choice]
             btn.size = (btn_width, btn_height)
@@ -442,7 +466,7 @@ class TabletopRoot(FloatLayout):
             btn.pos = (signal2_x, top_y - btn_height - idx * (btn_height + vertical_gap))
             btn.set_rotation(180)
 
-        decision2_x = signal2_x + btn_width + horizontal_gap
+        decision2_x = signal2_x + base_btn_width + horizontal_gap
         for idx, choice in enumerate(['bluff', 'wahr']):
             btn = self.decision_buttons[2][choice]
             btn.size = (btn_width, btn_height)
@@ -450,23 +474,43 @@ class TabletopRoot(FloatLayout):
             btn.set_rotation(180)
 
         # Center cards
-        center_card_width, center_card_height = 380 * scale, 560 * scale
+        base_center_card_width, base_center_card_height = 380 * scale, 560 * scale
+        center_card_width, center_card_height = (
+            base_center_card_width * size_factor,
+            base_center_card_height * size_factor,
+        )
         center_gap_x = 90 * scale
         center_gap_y = 60 * scale
-        left_x = W / 2 - center_card_width - center_gap_x / 2
-        right_x = W / 2 + center_gap_x / 2
-        bottom_y = H / 2 - center_card_height - center_gap_y / 2
-        top_y_center = H / 2 + center_gap_y / 2
+        left_x_base = W / 2 - base_center_card_width - center_gap_x / 2
+        right_x_base = W / 2 + center_gap_x / 2
+        bottom_y_base = H / 2 - base_center_card_height - center_gap_y / 2
+        top_y_base = H / 2 + center_gap_y / 2
+
+        def center_from_base(pos, size):
+            return pos[0] + size[0] / 2.0, pos[1] + size[1] / 2.0
+
+        def pos_from_center(center, size):
+            return center[0] - size[0] / 2.0, center[1] - size[1] / 2.0
+
+        bottom_right_center = center_from_base((right_x_base, bottom_y_base), (base_center_card_width, base_center_card_height))
+        bottom_left_center = center_from_base((left_x_base, bottom_y_base), (base_center_card_width, base_center_card_height))
+        top_left_center = center_from_base((left_x_base, top_y_base), (base_center_card_width, base_center_card_height))
+        top_right_center = center_from_base((right_x_base, top_y_base), (base_center_card_width, base_center_card_height))
 
         for idx, img in enumerate(self.center_cards[1]):
             img.size = (center_card_width, center_card_height)
-        self.center_cards[1][0].pos = (right_x, bottom_y)
-        self.center_cards[1][1].pos = (left_x, bottom_y)
+        self.center_cards[1][0].pos = pos_from_center(bottom_right_center, (center_card_width, center_card_height))
+        self.center_cards[1][1].pos = pos_from_center(bottom_left_center, (center_card_width, center_card_height))
 
         for idx, img in enumerate(self.center_cards[2]):
             img.size = (center_card_width, center_card_height)
-        self.center_cards[2][0].pos = (left_x, top_y_center)
-        self.center_cards[2][1].pos = (right_x, top_y_center)
+        self.center_cards[2][0].pos = pos_from_center(top_left_center, (center_card_width, center_card_height))
+        self.center_cards[2][1].pos = pos_from_center(top_right_center, (center_card_width, center_card_height))
+
+        left_x = self.center_cards[1][1].pos[0]
+        right_x = self.center_cards[1][0].pos[0]
+        bottom_y = self.center_cards[1][0].pos[1]
+        top_y_center = self.center_cards[2][0].pos[1]
 
         # --- User-Displays positionieren & drehen (2 Labels: unten/oben)
         display_gap = 20 * scale
