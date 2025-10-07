@@ -1105,6 +1105,7 @@ class TabletopRoot(FloatLayout):
         actual_total = self.get_hand_total_for_player(signaler)
         judge_total = self.get_hand_total_for_player(judge)
         actual_value = self.get_hand_value_for_player(signaler)
+        judge_value = self.get_hand_value_for_player(judge)
         actual_level = self.signal_level_from_value(actual_value)
 
         truthful = None
@@ -1116,23 +1117,22 @@ class TabletopRoot(FloatLayout):
                 truthful = False
 
         winner = None
+        draw = False
         if judge_choice and truthful is not None:
             if judge_choice == 'wahr':
-                winner = judge if truthful else signaler
+                if truthful:
+                    if actual_value is None or judge_value is None:
+                        winner = None
+                    elif actual_value > judge_value:
+                        winner = signaler
+                    elif judge_value > actual_value:
+                        winner = judge
+                    else:
+                        draw = True
+                else:
+                    winner = signaler
             elif judge_choice == 'bluff':
                 winner = judge if not truthful else signaler
-
-        draw = False
-        if (
-            winner in (signaler, judge)
-            and truthful is True
-            and judge_choice == 'wahr'
-            and actual_total is not None
-            and judge_total is not None
-            and actual_total == judge_total
-        ):
-            winner = None
-            draw = True
 
         self.last_outcome = {
             'winner': winner,
@@ -1140,6 +1140,7 @@ class TabletopRoot(FloatLayout):
             'actual_level': actual_level,
             'actual_value': actual_value,
             'actual_total': actual_total,
+            'judge_value': judge_value,
             'judge_total': judge_total,
             'signal_choice': signal_choice,
             'judge_choice': judge_choice,
