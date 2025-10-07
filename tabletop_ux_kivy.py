@@ -376,14 +376,15 @@ class TabletopRoot(FloatLayout):
         W, H = Window.size
         base_w, base_h = 3840.0, 2160.0
         scale = min(W / base_w if base_w else 1, H / base_h if base_h else 1)
+        size_factor = 0.8  # reduce symbol sizes by ~20% while keeping layout anchors
 
         self.bg.pos = (0, 0)
         self.bg.size = (W, H)
 
         corner_margin = 120 * scale
-        card_width, card_height = 420 * scale, 640 * scale
+        card_width, card_height = 420 * scale * size_factor, 640 * scale * size_factor
         card_gap = 70 * scale
-        start_size = (360 * scale, 360 * scale)
+        start_size = (360 * scale * size_factor, 360 * scale * size_factor)
 
         # Start buttons
         self.btn_start_p1.size = start_size
@@ -411,7 +412,7 @@ class TabletopRoot(FloatLayout):
         self.p2_inner.pos = p2_inner_pos
 
         # Button stacks
-        btn_width, btn_height = 260 * scale, 260 * scale
+        btn_width, btn_height = 260 * scale * size_factor, 260 * scale * size_factor
         vertical_gap = 40 * scale
         horizontal_gap = 60 * scale
         cluster_shift = 620 * scale
@@ -450,7 +451,7 @@ class TabletopRoot(FloatLayout):
             btn.set_rotation(180)
 
         # Center cards
-        center_card_width, center_card_height = 380 * scale, 560 * scale
+        center_card_width, center_card_height = 380 * scale * size_factor, 560 * scale * size_factor
         center_gap_x = 90 * scale
         center_gap_y = 60 * scale
         left_x = W / 2 - center_card_width - center_gap_x / 2
