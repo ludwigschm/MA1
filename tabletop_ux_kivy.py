@@ -643,23 +643,39 @@ class TabletopRoot(FloatLayout):
         except ValueError:
             return None
 
-    def get_hand_value_for_role(self, role: int):
+    def _cards_for_role(self, role: int):
         if role not in (1, 2):
             return None
         plan_info = self.get_current_plan()
-        if not plan_info:
+        if plan_info:
+            _, plan = plan_info
+            cards = plan.get(f'vp{role}') if plan else None
+            if cards and len(cards) == 2 and not any(card is None for card in cards):
+                return tuple(cards)
+        # Fallback über die sichtbaren Karten
+        player = self.physical_by_role.get(role)
+        if player == 1:
+            inner_widget, outer_widget = self.p1_inner, self.p1_outer
+        elif player == 2:
+            inner_widget, outer_widget = self.p2_inner, self.p2_outer
+        else:
             return None
-        _, plan = plan_info
-        if not plan:
+        inner_val = self.card_value_from_path(inner_widget.front_image)
+        outer_val = self.card_value_from_path(outer_widget.front_image)
+        if inner_val is None or outer_val is None:
             return None
-        value = plan.get(f'vp{role}_value')
-        parsed = self._parse_value(value)
-        if parsed is not None:
-            return parsed
-        cards = plan.get(f'vp{role}')
-        if not cards or any(card is None for card in cards):
+        return (inner_val, outer_val)
+
+    def get_hand_total_for_role(self, role: int):
+        cards = self._cards_for_role(role)
+        if not cards:
             return None
-        total = sum(cards)
+        return sum(cards)
+
+    def get_hand_value_for_role(self, role: int):
+        total = self.get_hand_total_for_role(role)
+        if total is None:
+            return None
         return 0 if total in (20, 21, 22) else total
 
     def get_hand_value_for_player(self, player: int):
@@ -667,16 +683,14 @@ class TabletopRoot(FloatLayout):
         value = self.get_hand_value_for_role(role)
         if value is not None:
             return value
-        if player == 1:
-            inner_widget, outer_widget = self.p1_inner, self.p1_outer
-        else:
-            inner_widget, outer_widget = self.p2_inner, self.p2_outer
-        inner_val = self.card_value_from_path(inner_widget.front_image)
-        outer_val = self.card_value_from_path(outer_widget.front_image)
-        if inner_val is None or outer_val is None:
+        total = self.get_hand_total_for_player(player)
+        if total is None:
             return None
-        total = inner_val + outer_val
         return 0 if total in (20, 21, 22) else total
+
+    def get_hand_total_for_player(self, player: int):
+        role = self.role_by_physical.get(player)
+        return self.get_hand_total_for_role(role) if role in (1, 2) else None
 
     def signal_level_from_value(self, value):
         parsed = self._parse_value(value)
@@ -1088,12 +1102,18 @@ class TabletopRoot(FloatLayout):
         judge = self.judge
         signal_choice = self.player_signals.get(signaler)
         judge_choice = self.player_decisions.get(judge)
+        actual_total = self.get_hand_total_for_player(signaler)
+        judge_total = self.get_hand_total_for_player(judge)
         actual_value = self.get_hand_value_for_player(signaler)
         actual_level = self.signal_level_from_value(actual_value)
 
         truthful = None
-        if signal_choice and actual_level:
-            truthful = (signal_choice == actual_level)
+        if signal_choice:
+            if actual_level:
+                truthful = (signal_choice == actual_level)
+            elif actual_total in (20, 21, 22):
+                # Werte über 19 können nicht wahrheitsgemäß signalisiert werden
+                truthful = False
 
         winner = None
         if judge_choice and truthful is not None:
@@ -1102,14 +1122,29 @@ class TabletopRoot(FloatLayout):
             elif judge_choice == 'bluff':
                 winner = judge if not truthful else signaler
 
+        draw = False
+        if (
+            winner in (signaler, judge)
+            and truthful is True
+            and judge_choice == 'wahr'
+            and actual_total is not None
+            and judge_total is not None
+            and actual_total == judge_total
+        ):
+            winner = None
+            draw = True
+
         self.last_outcome = {
             'winner': winner,
             'truthful': truthful,
             'actual_level': actual_level,
             'actual_value': actual_value,
+            'actual_total': actual_total,
+            'judge_total': judge_total,
             'signal_choice': signal_choice,
             'judge_choice': judge_choice,
             'payout': self.current_round_has_stake,
+            'draw': draw,
         }
         return self.last_outcome
 
