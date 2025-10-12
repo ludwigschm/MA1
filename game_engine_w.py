@@ -337,10 +337,9 @@ class GameEngine:
             f"session_{session_identifier}_{condition_slug}.csv"
         )
         self.session_csv = SessionCsvLogger(session_csv_path)
-        self.scores: Optional[Dict[VP, int]] = None
-        if cfg.payout:
-            start_points = cfg.payout_start_points
-            self.scores = {VP.VP1: start_points, VP.VP2: start_points}
+        self.scores: Optional[Dict[VP, int]] = (
+            {VP.VP1: 0, VP.VP2: 0} if cfg.payout else None
+        )
         # Runde 1: VP1 ist Spieler 1, VP2 ist Spieler 2
         roles = RoleMap(p1_is=VP.VP1, p2_is=VP.VP2)
         self.round_idx = 0
@@ -377,12 +376,9 @@ class GameEngine:
             return
         if winner == Player.P1:
             winner_vp = self.current.roles.p1_is
-            loser_vp = self.current.roles.p2_is
         else:
             winner_vp = self.current.roles.p2_is
-            loser_vp = self.current.roles.p1_is
         self.scores[winner_vp] += 1
-        self.scores[loser_vp] -= 1
 
     # --- Öffentliche API (UI) ---
 

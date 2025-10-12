@@ -991,18 +991,23 @@ class TabletopRoot(FloatLayout):
             block, plan = plan_info
             self.current_block_info = block
             self.round_in_block = self.current_round_idx + 1
-            self.current_round_has_stake = block['payout']
-            if block['payout'] and self.score_state_block != block['index']:
-                self.score_state = {1: 16, 2: 16}
+            upcoming_round = self.compute_global_round()
+            self.current_round_has_stake = bool(block.get('payout'))
+            if self.current_round_has_stake:
+                if (
+                    self.score_state is None
+                    or self.score_state_block != block['index']
+                ):
+                    self.score_state = {1: 0, 2: 0}
                 self.score_state_block = block['index']
-            if not block['payout']:
+            else:
                 self.score_state = None
                 self.score_state_block = None
             self.score_state_round_start = (
                 self.score_state.copy() if self.score_state else None
             )
             self.set_cards_from_plan(plan)
-            self.round = self.compute_global_round()
+            self.round = upcoming_round
         else:
             if self.current_block_idx >= len(self.blocks):
                 self.session_finished = True
@@ -1066,17 +1071,17 @@ class TabletopRoot(FloatLayout):
         outcome = self.compute_outcome()
         if (
             self.current_round_has_stake
-            and self.score_state
+            and self.score_state is not None
             and not self.outcome_score_applied
         ):
             winner = outcome.get('winner') if outcome else None
             if winner in (1, 2):
                 winner_role = self.role_by_physical.get(winner)
                 if winner_role in (1, 2):
-                    loser_role = 1 if winner_role == 2 else 2
-                    self.score_state[winner_role] += 1
-                    self.score_state[loser_role] -= 1
-                    self.outcome_score_applied = True
+                    self.score_state[winner_role] = (
+                        self.score_state.get(winner_role, 0) + 1
+                    )
+            self.outcome_score_applied = True
         if self.session_configured:
             self.log_event(None, 'showdown', outcome or {})
         self.update_user_displays()
@@ -1203,10 +1208,14 @@ class TabletopRoot(FloatLayout):
 
     def _result_with_score_for_vp(self, vp:int):
         base = self._result_for_vp(vp)
+        points = self._points_for_vp(vp)
+        if points is None:
+            return base
         if base == 'Unentschieden':
-            return 'Unentschieden 0'
-        delta = '+1' if base == 'Gewonnen' else '-1'
-        return f'{base} {delta}'
+            return f'{base} {points}'
+        if points > 0:
+            return f'{base} +{points}'
+        return f'{base} {points}'
 
     def _points_for_vp(self, vp:int):
         if not self.score_state:
@@ -1224,8 +1233,7 @@ class TabletopRoot(FloatLayout):
         header_role = f'Versuchsperson {vp}: Spieler {player}' if player in (1,2) else f'Versuchsperson {vp}'
 
         # Block-Logik
-        block_idx = self.current_block_info['index'] if self.current_block_info else None
-        with_points = bool(self.current_round_has_stake) and block_idx in (2,4)
+        with_points = bool(self.current_round_has_stake)
 
         # Signal & Urteil (global – beziehen sich auf aktuelle Runde)
         signal_choice = self.last_outcome.get('signal_choice') if self.last_outcome else self.player_signals.get(self.signaler)
