@@ -377,98 +377,165 @@ class TabletopRoot(FloatLayout):
         W, H = Window.size
         base_w, base_h = 3840.0, 2160.0
         scale = min(W / base_w if base_w else 1, H / base_h if base_h else 1)
-        size_scale = scale * 0.8
+        shrink = 0.8
 
         self.bg.pos = (0, 0)
         self.bg.size = (W, H)
 
         corner_margin = 120 * scale
-        card_width, card_height = 420 * size_scale, 640 * size_scale
+        card_width_base, card_height_base = 420 * scale, 640 * scale
         card_gap = 70 * scale
-        start_size = (360 * size_scale, 360 * size_scale)
+        start_size_base = 360 * scale
+        start_size = (start_size_base * shrink, start_size_base * shrink)
 
         # Start buttons
-        self.btn_start_p1.size = start_size
         start_margin = 60 * scale
-        self.btn_start_p1.pos = (start_margin, H - start_margin - start_size[1])
+        p1_start_center = (
+            start_margin + start_size_base / 2,
+            H - start_margin - start_size_base / 2,
+        )
+        self.btn_start_p1.size = start_size
+        self.btn_start_p1.pos = (
+            p1_start_center[0] - start_size[0] / 2,
+            p1_start_center[1] - start_size[1] / 2,
+        )
         self.btn_start_p1.set_rotation(180)
 
+        p2_start_center = (
+            W - start_margin - start_size_base / 2,
+            start_margin + start_size_base / 2,
+        )
         self.btn_start_p2.size = start_size
-        self.btn_start_p2.pos = (W - start_margin - start_size[0], start_margin)
+        self.btn_start_p2.pos = (
+            p2_start_center[0] - start_size[0] / 2,
+            p2_start_center[1] - start_size[1] / 2,
+        )
         self.btn_start_p2.set_rotation(0)
 
         # Cards positions
-        p1_outer_pos = (corner_margin, corner_margin)
-        p1_inner_pos = (corner_margin + card_width + card_gap, corner_margin)
-        self.p1_outer.size = (card_width, card_height)
+        p1_outer_pos_base = (corner_margin, corner_margin)
+        p1_inner_pos_base = (corner_margin + card_width_base + card_gap, corner_margin)
+        p2_outer_pos_base = (
+            W - corner_margin - card_width_base,
+            H - corner_margin - card_height_base,
+        )
+        p2_inner_pos_base = (
+            p2_outer_pos_base[0] - card_width_base - card_gap,
+            p2_outer_pos_base[1],
+        )
+
+        def shrink_pos(base_pos, base_size):
+            center_x = base_pos[0] + base_size[0] / 2
+            center_y = base_pos[1] + base_size[1] / 2
+            new_size = (base_size[0] * shrink, base_size[1] * shrink)
+            new_pos = (
+                center_x - new_size[0] / 2,
+                center_y - new_size[1] / 2,
+            )
+            return new_pos, new_size
+
+        p1_outer_pos, card_size = shrink_pos(p1_outer_pos_base, (card_width_base, card_height_base))
+        self.p1_outer.size = card_size
         self.p1_outer.pos = p1_outer_pos
-        self.p1_inner.size = (card_width, card_height)
+
+        p1_inner_pos, card_size = shrink_pos(p1_inner_pos_base, (card_width_base, card_height_base))
+        self.p1_inner.size = card_size
         self.p1_inner.pos = p1_inner_pos
 
-        p2_outer_pos = (W - corner_margin - card_width, H - corner_margin - card_height)
-        p2_inner_pos = (p2_outer_pos[0] - card_width - card_gap, p2_outer_pos[1])
-        self.p2_outer.size = (card_width, card_height)
+        p2_outer_pos, card_size = shrink_pos(p2_outer_pos_base, (card_width_base, card_height_base))
+        self.p2_outer.size = card_size
         self.p2_outer.pos = p2_outer_pos
-        self.p2_inner.size = (card_width, card_height)
+
+        p2_inner_pos, card_size = shrink_pos(p2_inner_pos_base, (card_width_base, card_height_base))
+        self.p2_inner.size = card_size
         self.p2_inner.pos = p2_inner_pos
 
         # Button stacks
-        btn_width, btn_height = 260 * size_scale, 260 * size_scale
+        btn_width_base, btn_height_base = 260 * scale, 260 * scale
+        btn_width, btn_height = btn_width_base * shrink, btn_height_base * shrink
         vertical_gap = 40 * scale
         horizontal_gap = 60 * scale
         cluster_shift = 620 * scale
         vertical_offset = 140 * scale
 
         # Player 1 (bottom right)
-        signal_x = W - corner_margin - btn_width - cluster_shift
+        signal_x_base = W - corner_margin - btn_width_base - cluster_shift
         base_y = corner_margin + vertical_offset
         for idx, level in enumerate(['low', 'mid', 'high']):
             btn = self.signal_buttons[1][level]
+            center_x = signal_x_base + btn_width_base / 2
+            center_y = base_y + idx * (btn_height_base + vertical_gap) + btn_height_base / 2
             btn.size = (btn_width, btn_height)
-            btn.pos = (signal_x, base_y + idx * (btn_height + vertical_gap))
+            btn.pos = (
+                center_x - btn_width / 2,
+                center_y - btn_height / 2,
+            )
             btn.set_rotation(0)
 
-        decision_x = signal_x - horizontal_gap - btn_width
+        decision_x_base = signal_x_base - horizontal_gap - btn_width_base
         for idx, choice in enumerate(['bluff', 'wahr']):
             btn = self.decision_buttons[1][choice]
+            center_x = decision_x_base + btn_width_base / 2
+            center_y = base_y + idx * (btn_height_base + vertical_gap) + btn_height_base / 2
             btn.size = (btn_width, btn_height)
-            btn.pos = (decision_x, base_y + idx * (btn_height + vertical_gap))
+            btn.pos = (
+                center_x - btn_width / 2,
+                center_y - btn_height / 2,
+            )
             btn.set_rotation(0)
 
         # Player 2 (top left)
-        signal2_x = corner_margin + cluster_shift
+        signal2_x_base = corner_margin + cluster_shift
         top_y = H - corner_margin - vertical_offset
         for idx, level in enumerate(['low', 'mid', 'high']):
             btn = self.signal_buttons[2][level]
+            center_x = signal2_x_base + btn_width_base / 2
+            center_y = top_y - idx * (btn_height_base + vertical_gap) - btn_height_base / 2
             btn.size = (btn_width, btn_height)
-            btn.pos = (signal2_x, top_y - btn_height - idx * (btn_height + vertical_gap))
+            btn.pos = (
+                center_x - btn_width / 2,
+                center_y - btn_height / 2,
+            )
             btn.set_rotation(180)
 
-        decision2_x = signal2_x + btn_width + horizontal_gap
+        decision2_x_base = signal2_x_base + btn_width_base + horizontal_gap
         for idx, choice in enumerate(['bluff', 'wahr']):
             btn = self.decision_buttons[2][choice]
+            center_x = decision2_x_base + btn_width_base / 2
+            center_y = top_y - idx * (btn_height_base + vertical_gap) - btn_height_base / 2
             btn.size = (btn_width, btn_height)
-            btn.pos = (decision2_x, top_y - btn_height - idx * (btn_height + vertical_gap))
+            btn.pos = (
+                center_x - btn_width / 2,
+                center_y - btn_height / 2,
+            )
             btn.set_rotation(180)
 
         # Center cards
-        center_card_width, center_card_height = 380 * size_scale, 560 * size_scale
+        center_card_width_base, center_card_height_base = 380 * scale, 560 * scale
+        center_card_width = center_card_width_base * shrink
+        center_card_height = center_card_height_base * shrink
         center_gap_x = 90 * scale
         center_gap_y = 60 * scale
-        left_x = W / 2 - center_card_width - center_gap_x / 2
-        right_x = W / 2 + center_gap_x / 2
-        bottom_y = H / 2 - center_card_height - center_gap_y / 2
-        top_y_center = H / 2 + center_gap_y / 2
+        left_x_base = W / 2 - center_card_width_base - center_gap_x / 2
+        right_x_base = W / 2 + center_gap_x / 2
+        bottom_y_base = H / 2 - center_card_height_base - center_gap_y / 2
+        top_y_center_base = H / 2 + center_gap_y / 2
 
-        for idx, img in enumerate(self.center_cards[1]):
-            img.size = (center_card_width, center_card_height)
-        self.center_cards[1][0].pos = (right_x, bottom_y)
-        self.center_cards[1][1].pos = (left_x, bottom_y)
+        def set_center_card(widget, base_pos):
+            new_pos, new_size = shrink_pos(base_pos, (center_card_width_base, center_card_height_base))
+            widget.size = new_size
+            widget.pos = new_pos
+            return new_pos, new_size
 
-        for idx, img in enumerate(self.center_cards[2]):
-            img.size = (center_card_width, center_card_height)
-        self.center_cards[2][0].pos = (left_x, top_y_center)
-        self.center_cards[2][1].pos = (right_x, top_y_center)
+        bottom_right_pos, _ = set_center_card(self.center_cards[1][0], (right_x_base, bottom_y_base))
+        bottom_left_pos, _ = set_center_card(self.center_cards[1][1], (left_x_base, bottom_y_base))
+        top_left_pos, _ = set_center_card(self.center_cards[2][0], (left_x_base, top_y_center_base))
+        set_center_card(self.center_cards[2][1], (right_x_base, top_y_center_base))
+
+        left_x = bottom_left_pos[0]
+        right_x = bottom_right_pos[0]
+        bottom_y = bottom_left_pos[1]
+        top_y_center = top_left_pos[1]
 
         # --- User-Displays positionieren & drehen (2 Labels: unten/oben)
         display_gap = 20 * scale
