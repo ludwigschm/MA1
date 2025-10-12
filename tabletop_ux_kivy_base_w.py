@@ -32,7 +32,7 @@ from datetime import datetime
 from kivy.uix.label import Label
 from kivy.graphics import Color, Rectangle, PushMatrix, PopMatrix, Rotate
 
-from game_engine_w import EventLogger, Phase as EnginePhase
+from game_engine_w import EventLogger, Phase as EnginePhase, SCORING_ROUNDS
 
 # --- Display fest auf 3840x2160, Vollbild aktivierbar (kommentiere die nächste Zeile, falls du Fenster willst)
 Config.set('graphics', 'fullscreen', 'auto')
