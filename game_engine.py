@@ -377,12 +377,9 @@ class GameEngine:
             return
         if winner == Player.P1:
             winner_vp = self.current.roles.p1_is
-            loser_vp = self.current.roles.p2_is
         else:
             winner_vp = self.current.roles.p2_is
-            loser_vp = self.current.roles.p1_is
         self.scores[winner_vp] += 1
-        self.scores[loser_vp] -= 1
 
     # --- Öffentliche API (UI) ---
 
