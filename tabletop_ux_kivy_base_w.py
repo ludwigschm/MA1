@@ -42,6 +42,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 UX_DIR = os.path.join(ROOT, 'UX')
 CARD_DIR = os.path.join(ROOT, 'Karten')
 
+BACKGROUND_IMAGE = os.path.join(UX_DIR, 'Aruco.png')
+
 ASSETS = {
     'play': {
         'live':  os.path.join(UX_DIR, 'play_live.png'),
@@ -206,8 +208,7 @@ class TabletopRoot(FloatLayout):
     def __init__(self, **kw):
         super().__init__(**kw)
         with self.canvas.before:
-            Color(0.75, 0.75, 0.75, 1)  # #BFBFBF
-            self.bg = Rectangle(pos=(0,0), size=Window.size)
+            self.bg = Rectangle(source=BACKGROUND_IMAGE, pos=(0, 0), size=Window.size)
         Window.bind(on_resize=self.on_resize)
 
         self.round = 1
@@ -376,14 +377,15 @@ class TabletopRoot(FloatLayout):
         W, H = Window.size
         base_w, base_h = 3840.0, 2160.0
         scale = min(W / base_w if base_w else 1, H / base_h if base_h else 1)
+        size_scale = scale * 0.8
 
         self.bg.pos = (0, 0)
         self.bg.size = (W, H)
 
         corner_margin = 120 * scale
-        card_width, card_height = 420 * scale, 640 * scale
+        card_width, card_height = 420 * size_scale, 640 * size_scale
         card_gap = 70 * scale
-        start_size = (360 * scale, 360 * scale)
+        start_size = (360 * size_scale, 360 * size_scale)
 
         # Start buttons
         self.btn_start_p1.size = start_size
@@ -411,7 +413,7 @@ class TabletopRoot(FloatLayout):
         self.p2_inner.pos = p2_inner_pos
 
         # Button stacks
-        btn_width, btn_height = 260 * scale, 260 * scale
+        btn_width, btn_height = 260 * size_scale, 260 * size_scale
         vertical_gap = 40 * scale
         horizontal_gap = 60 * scale
         cluster_shift = 620 * scale
@@ -450,7 +452,7 @@ class TabletopRoot(FloatLayout):
             btn.set_rotation(180)
 
         # Center cards
-        center_card_width, center_card_height = 380 * scale, 560 * scale
+        center_card_width, center_card_height = 380 * size_scale, 560 * size_scale
         center_gap_x = 90 * scale
         center_gap_y = 60 * scale
         left_x = W / 2 - center_card_width - center_gap_x / 2
