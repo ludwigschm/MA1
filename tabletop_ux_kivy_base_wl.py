@@ -993,7 +993,7 @@ class TabletopRoot(FloatLayout):
             self.round_in_block = self.current_round_idx + 1
             self.current_round_has_stake = block['payout']
             if block['payout'] and self.score_state_block != block['index']:
-                self.score_state = {1: 16, 2: 16}
+                self.score_state = {1: 0, 2: 0}
                 self.score_state_block = block['index']
             if not block['payout']:
                 self.score_state = None
@@ -1073,9 +1073,7 @@ class TabletopRoot(FloatLayout):
             if winner in (1, 2):
                 winner_role = self.role_by_physical.get(winner)
                 if winner_role in (1, 2):
-                    loser_role = 1 if winner_role == 2 else 2
                     self.score_state[winner_role] += 1
-                    self.score_state[loser_role] -= 1
                     self.outcome_score_applied = True
         if self.session_configured:
             self.log_event(None, 'showdown', outcome or {})
@@ -1205,8 +1203,9 @@ class TabletopRoot(FloatLayout):
         base = self._result_for_vp(vp)
         if base == 'Unentschieden':
             return 'Unentschieden 0'
-        delta = '+1' if base == 'Gewonnen' else '-1'
-        return f'{base} {delta}'
+        if base == 'Gewonnen':
+            return 'Gewonnen +1'
+        return 'Verloren 0'
 
     def _points_for_vp(self, vp:int):
         if not self.score_state:
