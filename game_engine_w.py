@@ -164,9 +164,6 @@ def hand_value(a: int, b: int) -> int:
 FORCED_BLUFF_LABEL = "erzwungener_bluff"
 
 
-SCORING_ROUNDS = {2, 4}
-
-
 def hand_category(a: int, b: int) -> Optional[SignalLevel]:
     total = a + b
     if total == 19:
@@ -340,14 +337,13 @@ class GameEngine:
             f"session_{session_identifier}_{condition_slug}.csv"
         )
         self.session_csv = SessionCsvLogger(session_csv_path)
-        self.scores: Optional[Dict[VP, int]] = None
-        if cfg.payout:
-            self.scores = {VP.VP1: 0, VP.VP2: 0}
+        self.scores: Optional[Dict[VP, int]] = (
+            {VP.VP1: 0, VP.VP2: 0} if cfg.payout else None
+        )
         # Runde 1: VP1 ist Spieler 1, VP2 ist Spieler 2
         roles = RoleMap(p1_is=VP.VP1, p2_is=VP.VP2)
         self.round_idx = 0
         self.current = RoundState(index=0, plan=self.schedule.rounds[0], roles=roles)
-        self._reset_round_scores()
 
     # --- Hilfen ---
     def _ensure(self, allowed: List[Phase]):
@@ -358,11 +354,6 @@ class GameEngine:
         if self.scores is None:
             return None
         return {VP.VP1: self.scores[VP.VP1], VP.VP2: self.scores[VP.VP2]}
-
-    def _reset_round_scores(self):
-        if self.scores is None:
-            return
-        self.scores = {VP.VP1: 0, VP.VP2: 0}
 
     def _log(self, actor: str, action: str, payload: Dict[str, Any],
              round_index_override: Optional[int] = None):
@@ -382,9 +373,6 @@ class GameEngine:
 
     def _update_scores(self, winner: Optional[Player]):
         if self.scores is None or winner is None:
-            return
-        round_number = self.current.index + 1
-        if round_number not in SCORING_ROUNDS:
             return
         if winner == Player.P1:
             winner_vp = self.current.roles.p1_is
@@ -635,7 +623,6 @@ class GameEngine:
             roles=new_roles,
             phase=Phase.DEALING  # nächste Runde beginnt direkt mit Aufdecken
         )
-        self._reset_round_scores()
         self._log("SYS", "phase_change", {
             "to": "DEALING",
             "roles": {"P1": new_roles.p1_is.value, "P2": new_roles.p2_is.value}

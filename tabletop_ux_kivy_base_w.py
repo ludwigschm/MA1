@@ -992,9 +992,13 @@ class TabletopRoot(FloatLayout):
             self.current_block_info = block
             self.round_in_block = self.current_round_idx + 1
             upcoming_round = self.compute_global_round()
-            self.current_round_has_stake = upcoming_round in SCORING_ROUNDS
+            self.current_round_has_stake = bool(block.get('payout'))
             if self.current_round_has_stake:
-                self.score_state = {1: 0, 2: 0}
+                if (
+                    self.score_state is None
+                    or self.score_state_block != block['index']
+                ):
+                    self.score_state = {1: 0, 2: 0}
                 self.score_state_block = block['index']
             else:
                 self.score_state = None
