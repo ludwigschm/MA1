@@ -318,8 +318,20 @@ class TabletopRoot(FloatLayout):
          # --- User-Displays (unter/über den vier Karten in der Mitte)
         # --- User-Displays: je Seite eines (unten VP1, oben VP2 – oben rotiert)
         self.user_displays = {
-            1: RotatableLabel(size_hint=(None, None), halign='left', valign='top', color=(1,1,1,1)),  # unten
-            2: RotatableLabel(size_hint=(None, None), halign='left', valign='top', color=(1,1,1,1)),  # oben (180°)
+            1: RotatableLabel(
+                size_hint=(None, None),
+                halign='left',
+                valign='top',
+                color=(1, 1, 1, 1),
+                markup=True,
+            ),  # unten
+            2: RotatableLabel(
+                size_hint=(None, None),
+                halign='left',
+                valign='top',
+                color=(1, 1, 1, 1),
+                markup=True,
+            ),  # oben (180°)
         }
         for lbl in self.user_displays.values():
             lbl.text = ''
@@ -496,10 +508,12 @@ class TabletopRoot(FloatLayout):
         self.center_cards[2][1].pos = (right_x, top_y_center)
 
         # --- User-Displays positionieren & drehen (2 Labels: unten/oben)
-        display_gap = 20 * scale
+        display_gap = 40 * scale
         span_width = 2 * center_card_width + center_gap_x   # über beide Karten spannen
         display_width = span_width
-        display_height = 180 * scale
+        display_height = 520 * scale
+        padding_x = 60 * scale
+        padding_y = 40 * scale
 
         # Unteres Display (VP1): unter beiden unteren Karten, keine Drehung
         bottom_span_x = left_x
@@ -509,8 +523,12 @@ class TabletopRoot(FloatLayout):
             bottom_span_x,
             bottom_span_y - display_gap - display_height
         )
-        self.user_displays[1].text_size = (display_width, display_height)
-        self.user_displays[1].font_size = 28 * scale if scale else 28
+        self.user_displays[1].text_size = (
+            display_width - 2 * padding_x,
+            display_height - 2 * padding_y,
+        )
+        self.user_displays[1].padding = (padding_x, padding_y)
+        self.user_displays[1].font_size = 32 * scale if scale else 32
         self.user_displays[1].set_rotation(0)
 
         # Oberes Display (VP2): über beiden oberen Karten, 180° gedreht
@@ -520,8 +538,12 @@ class TabletopRoot(FloatLayout):
             left_x,
             top_cards_top + display_gap
         )
-        self.user_displays[2].text_size = (display_width, display_height)
-        self.user_displays[2].font_size = 28 * scale if scale else 28
+        self.user_displays[2].text_size = (
+            display_width - 2 * padding_x,
+            display_height - 2 * padding_y,
+        )
+        self.user_displays[2].padding = (padding_x, padding_y)
+        self.user_displays[2].font_size = 32 * scale if scale else 32
         self.user_displays[2].set_rotation(180)
 
         # Round badge
@@ -1232,10 +1254,27 @@ class TabletopRoot(FloatLayout):
             'bluff': 'Bluff',
         }
         return mapping.get(decision)
-    def _korrekt_label(self, ok: bool | None):
-        if ok is None:
-            return '-'
-        return 'korrektes' if ok else 'inkorrektes'
+    def _result_signal_text(self, truthful: bool | None) -> str:
+        if truthful is None:
+            return 'Signal: -'
+        return 'Signal: Wahr' if truthful else 'Signal: Bluff'
+
+    def _result_judge_text(self, judge_ok: bool | None) -> str:
+        if judge_ok is None:
+            return 'Urteil: -'
+        return 'Urteil: korrekt' if judge_ok else 'Urteil: inkorrekt'
+
+    def _outcome_statement(self, truthful: bool | None, judge_choice: str | None) -> str:
+        if truthful is None or judge_choice not in ('wahr', 'bluff'):
+            return ''
+        key = ('wahr' if truthful else 'bluff', judge_choice)
+        mapping = {
+            ('bluff', 'wahr'): 'Sp2 wurde getäuscht:',
+            ('bluff', 'bluff'): 'Sp2 erkennt den Bluff:',
+            ('wahr', 'wahr'): 'Showdown:',
+            ('wahr', 'bluff'): 'SP1 ist ehrlich:',
+        }
+        return mapping.get(key, '')
 
     def _signal_label_german(self, level: str | None):
         return self.format_signal_choice(level) or '-'
@@ -1307,7 +1346,9 @@ class TabletopRoot(FloatLayout):
 
         signal_line = f"Signal: {self._signal_label_german(signal_choice)}"
         urteil_line = f"Urteil: {self._urteil_label_german(judge_choice)}"
-        ergebnis_line = f"Ergebnis: {self._korrekt_label(truthful)} Signal - {self._korrekt_label(judge_ok)} Urteil"
+        ergebnis_signal = self._result_signal_text(truthful)
+        ergebnis_urteil = self._result_judge_text(judge_ok)
+        outcome_statement = self._outcome_statement(truthful, judge_choice)
 
         if with_points:
             points = self._points_for_vp(vp)
@@ -1318,8 +1359,23 @@ class TabletopRoot(FloatLayout):
             header = f'{header_round} | {header_role}'
             result_line = self._result_for_vp(vp)
 
+        lines = [
+            f"[b]{header}[/b]",
+            '',
+            '[b]Züge[/b]',
+            signal_line,
+            urteil_line,
+            '',
+            '[b]Ergebnis[/b]',
+            ergebnis_signal,
+            ergebnis_urteil,
+        ]
+        if outcome_statement:
+            lines.extend(['', outcome_statement])
+        lines.extend(['', f"[b]{result_line}[/b]"])
+
         # Mehrzeilig – leichte Abstände über \n
-        return "\n".join([header, signal_line, urteil_line, ergebnis_line, result_line])
+        return "\n".join(lines)
 
     def update_user_displays(self):
         """Setzt die Texte in den beiden Displays (unten=VP1, oben=VP2)."""
