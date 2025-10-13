@@ -532,16 +532,16 @@ class TabletopRoot(FloatLayout):
         display_gap = 30 * scale
         span_width = 2 * center_card_width + center_gap_x
         display_width = span_width
-        header_height = 80 * scale
-        column_height = 280 * scale
-        outcome_height = 160 * scale
-        vertical_gap = 20 * scale
+        header_height = 72 * scale
+        column_height = 230 * scale
+        outcome_height = 130 * scale
+        vertical_gap = 12 * scale
         column_spacing = 40 * scale
         column_width = (display_width - column_spacing) / 2
         content_padding_x = 40 * scale
-        content_padding_y = 30 * scale
+        content_padding_y = 24 * scale
         total_height = header_height + column_height + outcome_height + 2 * vertical_gap
-        center_pull = 120 * scale
+        center_pull = 90 * scale
 
         # Unteres Display (VP1)
         bottom_span_x = left_x
@@ -607,7 +607,7 @@ class TabletopRoot(FloatLayout):
         column_top_y = top_base_y + outcome_height + vertical_gap
         widgets_top['moves'].size = (column_width, column_height)
         widgets_top['moves'].pos = (
-            left_x,
+            left_x + column_width + column_spacing,
             column_top_y
         )
         widgets_top['moves'].text_size = (column_width - 2 * content_padding_x, column_height - 2 * content_padding_y)
@@ -617,7 +617,7 @@ class TabletopRoot(FloatLayout):
 
         widgets_top['result'].size = (column_width, column_height)
         widgets_top['result'].pos = (
-            left_x + column_width + column_spacing,
+            left_x,
             column_top_y
         )
         widgets_top['result'].text_size = (column_width - 2 * content_padding_x, column_height - 2 * content_padding_y)
@@ -1464,8 +1464,7 @@ class TabletopRoot(FloatLayout):
         ]
 
         outcome_lines = ['[b]Outcome[/b]']
-        if outcome_statement:
-            outcome_lines.append(outcome_statement)
+        outcome_lines.append(outcome_statement or '-')
         if result_line:
             outcome_lines.append(f"[b]{result_line}[/b]")
 
