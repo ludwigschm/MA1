@@ -529,7 +529,7 @@ class TabletopRoot(FloatLayout):
         self.center_cards[2][1].pos = (right_x, top_y_center)
 
         # --- User-Displays positionieren & drehen
-        display_gap = 40 * scale
+        display_gap = 30 * scale
         span_width = 2 * center_card_width + center_gap_x
         display_width = span_width
         header_height = 80 * scale
@@ -541,10 +541,11 @@ class TabletopRoot(FloatLayout):
         content_padding_x = 40 * scale
         content_padding_y = 30 * scale
         total_height = header_height + column_height + outcome_height + 2 * vertical_gap
+        center_pull = 120 * scale
 
         # Unteres Display (VP1)
         bottom_span_x = left_x
-        bottom_span_y = bottom_y - display_gap - total_height
+        bottom_span_y = bottom_y - display_gap - total_height + center_pull
         widgets_bottom = self.user_display_widgets[1]
 
         widgets_bottom['header'].size = (display_width, header_height)
@@ -590,7 +591,7 @@ class TabletopRoot(FloatLayout):
 
         # Oberes Display (VP2)
         top_cards_top = top_y_center + center_card_height
-        top_base_y = top_cards_top + display_gap
+        top_base_y = top_cards_top + display_gap - center_pull
         widgets_top = self.user_display_widgets[2]
 
         widgets_top['header'].size = (display_width, header_height)
@@ -1412,17 +1413,17 @@ class TabletopRoot(FloatLayout):
         """Erzeugt die Inhalte für das Nutzer-Display gemäß Block (1/3 vs. 2/4)."""
         # Runde im Block / total=16
         rnd_in_block = self.round_in_block or 0
-        header_round = f'Runde {rnd_in_block}/16'
+        header_round = f'Round {rnd_in_block}/16'
 
         # Zuordnung VP -> Spieler
         player = self.physical_by_role.get(vp)
         role_number = self.player_roles.get(player) if player in (1, 2) else None
         if role_number in (1, 2):
-            header_role = f'Versuchsperson {vp}: Spieler {role_number}'
+            header_role = f'VP{vp}: Player {role_number}'
         elif player in (1, 2):
-            header_role = f'Versuchsperson {vp}: Spieler {player}'
+            header_role = f'VP{vp}: Player {player}'
         else:
-            header_role = f'Versuchsperson {vp}'
+            header_role = f'VP{vp}'
 
         # Block-Logik
         block_idx = self.current_block_info['index'] if self.current_block_info else None
@@ -1462,10 +1463,11 @@ class TabletopRoot(FloatLayout):
             ergebnis_urteil,
         ]
 
-        outcome_lines = []
+        outcome_lines = ['[b]Outcome[/b]']
         if outcome_statement:
             outcome_lines.append(outcome_statement)
-        outcome_lines.append(f"[b]{result_line}[/b]")
+        if result_line:
+            outcome_lines.append(f"[b]{result_line}[/b]")
 
         return {
             'header': f"[b]{header}[/b]",
