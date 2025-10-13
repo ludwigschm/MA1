@@ -488,15 +488,12 @@ class GameEngine:
     def click_next_round(self, player: Player):
         """ Beide drücken 'Nächste Runde'. Danach: Rollen tauschen, nächste Runde → DEALING. """
         self._ensure([Phase.ROUND_DONE])
-        next_round_idx = self.current.index
-        if self.current.index + 1 < len(self.schedule.rounds):
-            next_round_idx = self.current.index + 1
         if player == Player.P1 and not self.current.next_ready_p1:
             self.current.next_ready_p1 = True
-            self._log("P1", "next_round_click", {}, round_index_override=next_round_idx)
+            self._log("P1", "next_round_click", {})
         if player == Player.P2 and not self.current.next_ready_p2:
             self.current.next_ready_p2 = True
-            self._log("P2", "next_round_click", {}, round_index_override=next_round_idx)
+            self._log("P2", "next_round_click", {})
 
         if self.current.next_ready_p1 and self.current.next_ready_p2:
             self._advance_and_swap_roles()
