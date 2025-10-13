@@ -215,6 +215,7 @@ class TabletopRoot(FloatLayout):
         self.judge = 2
         self.first_player = None
         self.second_player = None
+        self.player_roles = {}
         self.update_turn_order()
         self.phase = PH_WAIT_BOTH_START
         # Versuchsperson 1 sitzt immer unten (Spieler 1), Versuchsperson 2 oben (Spieler 2)
@@ -388,12 +389,12 @@ class TabletopRoot(FloatLayout):
         # Start buttons
         self.btn_start_p1.size = start_size
         start_margin = 60 * scale
-        self.btn_start_p1.pos = (start_margin, H - start_margin - start_size[1])
-        self.btn_start_p1.set_rotation(180)
+        self.btn_start_p1.pos = (W - start_margin - start_size[0], start_margin)
+        self.btn_start_p1.set_rotation(0)
 
         self.btn_start_p2.size = start_size
-        self.btn_start_p2.pos = (W - start_margin - start_size[0], start_margin)
-        self.btn_start_p2.set_rotation(0)
+        self.btn_start_p2.pos = (start_margin, H - start_margin - start_size[1])
+        self.btn_start_p2.set_rotation(180)
 
         # Cards positions
         p1_outer_pos = (corner_margin, corner_margin)
@@ -716,10 +717,12 @@ class TabletopRoot(FloatLayout):
         if plan:
             vp1_cards = plan['vp1']
             vp2_cards = plan['vp2']
-            self.p1_inner.set_front(self.value_to_card_path(vp1_cards[0]))
-            self.p1_outer.set_front(self.value_to_card_path(vp1_cards[1]))
-            self.p2_inner.set_front(self.value_to_card_path(vp2_cards[0]))
-            self.p2_outer.set_front(self.value_to_card_path(vp2_cards[1]))
+            first_vp1, second_vp1 = vp1_cards[0], vp1_cards[1]
+            first_vp2, second_vp2 = vp2_cards[0], vp2_cards[1]
+            self.p1_inner.set_front(self.value_to_card_path(first_vp1))
+            self.p1_outer.set_front(self.value_to_card_path(second_vp1))
+            self.p2_inner.set_front(self.value_to_card_path(first_vp2))
+            self.p2_outer.set_front(self.value_to_card_path(second_vp2))
         else:
             default = ASSETS['cards']['back']
             for widget in (self.p1_inner, self.p1_outer, self.p2_inner, self.p2_outer):
@@ -1236,7 +1239,13 @@ class TabletopRoot(FloatLayout):
 
         # Zuordnung VP -> Spieler
         player = self.physical_by_role.get(vp)
-        header_role = f'Versuchsperson {vp}: Spieler {player}' if player in (1,2) else f'Versuchsperson {vp}'
+        role_number = self.player_roles.get(player) if player in (1, 2) else None
+        if role_number in (1, 2):
+            header_role = f'Versuchsperson {vp}: Spieler {role_number}'
+        elif player in (1, 2):
+            header_role = f'Versuchsperson {vp}: Spieler {player}'
+        else:
+            header_role = f'Versuchsperson {vp}'
 
         # Block-Logik
         block_idx = self.current_block_info['index'] if self.current_block_info else None
@@ -1293,11 +1302,18 @@ class TabletopRoot(FloatLayout):
         self.physical_by_role = {role: player for player, role in self.role_by_physical.items()}
 
     def update_turn_order(self):
-        self.first_player = self.signaler if self.signaler in (1, 2) else 1
-        if self.judge in (1, 2) and self.judge != self.first_player:
-            self.second_player = self.judge
+        first = self.signaler if self.signaler in (1, 2) else 1
+        if self.judge in (1, 2) and self.judge != first:
+            second = self.judge
         else:
-            self.second_player = 2 if self.first_player == 1 else 1
+            second = 2 if first == 1 else 1
+
+        self.first_player = first
+        self.second_player = second
+        self.player_roles = {
+            first: 1,
+            second: 2,
+        }
 
     def phase_for_player(self, player: int, which: str):
         if player not in (1, 2):
@@ -1341,8 +1357,13 @@ class TabletopRoot(FloatLayout):
         if player is None:
             actor = 'SYS'
         else:
-            role = self.role_by_physical.get(player)
-            actor = 'P1' if role == 1 else 'P2'
+            role = self.player_roles.get(player)
+            if role == 1:
+                actor = 'P1'
+            elif role == 2:
+                actor = 'P2'
+            else:
+                actor = 'P1' if player == 1 else 'P2'
         round_idx = max(0, self.round - 1)
         self.logger.log(
             self.session_id,
@@ -1443,13 +1464,15 @@ class TabletopRoot(FloatLayout):
             if vp_num in (1, 2):
                 actor_vp = f'VP{vp_num}'
         spieler1_vp = ''
-        vp_player1 = self.role_by_physical.get(1)
-        if vp_player1 in (1, 2):
-            spieler1_vp = f'VP{vp_player1}'
+        first_player = self.first_player if self.first_player in (1, 2) else None
+        if first_player is not None:
+            vp_player1 = self.role_by_physical.get(first_player)
+            if vp_player1 in (1, 2):
+                spieler1_vp = f'VP{vp_player1}'
         action_label = self.round_log_action_label(action, payload)
         timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
         winner_label = ''
-        if self.last_outcome and self.last_outcome.get('winner') in (1, 2):
+        if action == 'next_round_click' and self.last_outcome and self.last_outcome.get('winner') in (1, 2):
             winner_vp = self.role_by_physical.get(self.last_outcome.get('winner'))
             if winner_vp in (1, 2):
                 winner_label = f'VP{winner_vp}'
@@ -1578,6 +1601,7 @@ class TabletopRoot(FloatLayout):
             'signaler': self.signaler,
             'judge': self.judge,
             'vp_roles': self.role_by_physical.copy(),
+            'player_roles': self.player_roles.copy(),
         })
 
     def record_action(self, player:int, text:str):
