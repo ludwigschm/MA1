@@ -317,26 +317,46 @@ class TabletopRoot(FloatLayout):
 
          # --- User-Displays (unter/über den vier Karten in der Mitte)
         # --- User-Displays: je Seite eines (unten VP1, oben VP2 – oben rotiert)
-        self.user_displays = {
-            1: RotatableLabel(
+        self.user_display_widgets = {}
+        for vp in (1, 2):
+            header = RotatableLabel(
+                size_hint=(None, None),
+                halign='left',
+                valign='middle',
+                color=(1, 1, 1, 1),
+                markup=True,
+            )
+            moves = RotatableLabel(
                 size_hint=(None, None),
                 halign='left',
                 valign='top',
                 color=(1, 1, 1, 1),
                 markup=True,
-            ),  # unten
-            2: RotatableLabel(
+            )
+            result = RotatableLabel(
                 size_hint=(None, None),
                 halign='left',
                 valign='top',
                 color=(1, 1, 1, 1),
                 markup=True,
-            ),  # oben (180°)
-        }
-        for lbl in self.user_displays.values():
-            lbl.text = ''
-            lbl.opacity = 1
-            self.add_widget(lbl)
+            )
+            outcome = RotatableLabel(
+                size_hint=(None, None),
+                halign='center',
+                valign='middle',
+                color=(1, 1, 1, 1),
+                markup=True,
+            )
+            for lbl in (header, moves, result, outcome):
+                lbl.text = ''
+                lbl.opacity = 1
+                self.add_widget(lbl)
+            self.user_display_widgets[vp] = {
+                'header': header,
+                'moves': moves,
+                'result': result,
+                'outcome': outcome,
+            }
             
 
 
@@ -508,44 +528,112 @@ class TabletopRoot(FloatLayout):
         self.center_cards[2][0].pos = (left_x, top_y_center)
         self.center_cards[2][1].pos = (right_x, top_y_center)
 
-        # --- User-Displays positionieren & drehen (2 Labels: unten/oben)
-        display_gap = 40 * scale
-        span_width = 2 * center_card_width + center_gap_x   # über beide Karten spannen
+        # --- User-Displays positionieren & drehen
+        display_gap = 30 * scale
+        span_width = 2 * center_card_width + center_gap_x
         display_width = span_width
-        display_height = 660 * scale
-        padding_x = 60 * scale
-        padding_y = 40 * scale
+        header_height = 80 * scale
+        column_height = 280 * scale
+        outcome_height = 160 * scale
+        vertical_gap = 20 * scale
+        column_spacing = 40 * scale
+        column_width = (display_width - column_spacing) / 2
+        content_padding_x = 40 * scale
+        content_padding_y = 30 * scale
+        total_height = header_height + column_height + outcome_height + 2 * vertical_gap
+        center_pull = 120 * scale
 
-        # Unteres Display (VP1): unter beiden unteren Karten, keine Drehung
+        # Unteres Display (VP1)
         bottom_span_x = left_x
-        bottom_span_y = bottom_y
-        self.user_displays[1].size = (display_width, display_height)
-        self.user_displays[1].pos = (
-            bottom_span_x,
-            bottom_span_y - display_gap - display_height
-        )
-        self.user_displays[1].text_size = (
-            display_width - 2 * padding_x,
-            display_height - 2 * padding_y,
-        )
-        self.user_displays[1].padding = (padding_x, padding_y)
-        self.user_displays[1].font_size = 32 * scale if scale else 32
-        self.user_displays[1].set_rotation(0)
+        bottom_span_y = bottom_y - display_gap - total_height + center_pull
+        widgets_bottom = self.user_display_widgets[1]
 
-        # Oberes Display (VP2): über beiden oberen Karten, 180° gedreht
+        widgets_bottom['header'].size = (display_width, header_height)
+        widgets_bottom['header'].pos = (
+            bottom_span_x,
+            bottom_span_y + column_height + outcome_height + 2 * vertical_gap
+        )
+        widgets_bottom['header'].text_size = (display_width - 2 * content_padding_x, header_height)
+        widgets_bottom['header'].padding = (content_padding_x, 0)
+        widgets_bottom['header'].font_size = 42 * scale if scale else 42
+        widgets_bottom['header'].set_rotation(0)
+
+        column_base_y = bottom_span_y + outcome_height + vertical_gap
+        widgets_bottom['moves'].size = (column_width, column_height)
+        widgets_bottom['moves'].pos = (
+            bottom_span_x,
+            column_base_y
+        )
+        widgets_bottom['moves'].text_size = (column_width - 2 * content_padding_x, column_height - 2 * content_padding_y)
+        widgets_bottom['moves'].padding = (content_padding_x, content_padding_y)
+        widgets_bottom['moves'].font_size = 34 * scale if scale else 34
+        widgets_bottom['moves'].set_rotation(0)
+
+        widgets_bottom['result'].size = (column_width, column_height)
+        widgets_bottom['result'].pos = (
+            bottom_span_x + column_width + column_spacing,
+            column_base_y
+        )
+        widgets_bottom['result'].text_size = (column_width - 2 * content_padding_x, column_height - 2 * content_padding_y)
+        widgets_bottom['result'].padding = (content_padding_x, content_padding_y)
+        widgets_bottom['result'].font_size = 34 * scale if scale else 34
+        widgets_bottom['result'].set_rotation(0)
+
+        widgets_bottom['outcome'].size = (display_width, outcome_height)
+        widgets_bottom['outcome'].pos = (
+            bottom_span_x,
+            bottom_span_y
+        )
+        widgets_bottom['outcome'].text_size = (display_width - 2 * content_padding_x, outcome_height - 2 * content_padding_y)
+        widgets_bottom['outcome'].padding = (content_padding_x, content_padding_y)
+        widgets_bottom['outcome'].font_size = 38 * scale if scale else 38
+        widgets_bottom['outcome'].set_rotation(0)
+
+        # Oberes Display (VP2)
         top_cards_top = top_y_center + center_card_height
-        self.user_displays[2].size = (display_width, display_height)
-        self.user_displays[2].pos = (
+        top_base_y = top_cards_top + display_gap - center_pull
+        widgets_top = self.user_display_widgets[2]
+
+        widgets_top['header'].size = (display_width, header_height)
+        widgets_top['header'].pos = (
             left_x,
-            top_cards_top + display_gap
+            top_base_y + outcome_height + column_height + 2 * vertical_gap
         )
-        self.user_displays[2].text_size = (
-            display_width - 2 * padding_x,
-            display_height - 2 * padding_y,
+        widgets_top['header'].text_size = (display_width - 2 * content_padding_x, header_height)
+        widgets_top['header'].padding = (content_padding_x, 0)
+        widgets_top['header'].font_size = 42 * scale if scale else 42
+        widgets_top['header'].set_rotation(180)
+
+        column_top_y = top_base_y + outcome_height + vertical_gap
+        widgets_top['moves'].size = (column_width, column_height)
+        widgets_top['moves'].pos = (
+            left_x,
+            column_top_y
         )
-        self.user_displays[2].padding = (padding_x, padding_y)
-        self.user_displays[2].font_size = 32 * scale if scale else 32
-        self.user_displays[2].set_rotation(180)
+        widgets_top['moves'].text_size = (column_width - 2 * content_padding_x, column_height - 2 * content_padding_y)
+        widgets_top['moves'].padding = (content_padding_x, content_padding_y)
+        widgets_top['moves'].font_size = 34 * scale if scale else 34
+        widgets_top['moves'].set_rotation(180)
+
+        widgets_top['result'].size = (column_width, column_height)
+        widgets_top['result'].pos = (
+            left_x + column_width + column_spacing,
+            column_top_y
+        )
+        widgets_top['result'].text_size = (column_width - 2 * content_padding_x, column_height - 2 * content_padding_y)
+        widgets_top['result'].padding = (content_padding_x, content_padding_y)
+        widgets_top['result'].font_size = 34 * scale if scale else 34
+        widgets_top['result'].set_rotation(180)
+
+        widgets_top['outcome'].size = (display_width, outcome_height)
+        widgets_top['outcome'].pos = (
+            left_x,
+            top_base_y
+        )
+        widgets_top['outcome'].text_size = (display_width - 2 * content_padding_x, outcome_height - 2 * content_padding_y)
+        widgets_top['outcome'].padding = (content_padding_x, content_padding_y)
+        widgets_top['outcome'].font_size = 38 * scale if scale else 38
+        widgets_top['outcome'].set_rotation(180)
 
         # Round badge
         badge_width, badge_height = 1400 * scale, 70 * scale
@@ -574,6 +662,9 @@ class TabletopRoot(FloatLayout):
                 btn._update_transform()
         self.btn_start_p1._update_transform()
         self.btn_start_p2._update_transform()
+        for vp_widgets in self.user_display_widgets.values():
+            for lbl in vp_widgets.values():
+                lbl._update_transform()
 
     # --- Datenquellen & Hilfsfunktionen ---
     def load_blocks(self):
@@ -1318,21 +1409,21 @@ class TabletopRoot(FloatLayout):
             return None
         return self.score_state.get(vp)
 
-    def format_user_display_text(self, vp:int):
-        """Erzeugt den Text fürs Display gemäß Block (1/3 vs. 2/4)."""
+    def format_user_display_content(self, vp:int):
+        """Erzeugt die Inhalte für das Nutzer-Display gemäß Block (1/3 vs. 2/4)."""
         # Runde im Block / total=16
         rnd_in_block = self.round_in_block or 0
-        header_round = f'Runde {rnd_in_block}/16'
+        header_round = f'Round {rnd_in_block}/16'
 
         # Zuordnung VP -> Spieler
         player = self.physical_by_role.get(vp)
         role_number = self.player_roles.get(player) if player in (1, 2) else None
         if role_number in (1, 2):
-            header_role = f'Versuchsperson {vp}: Spieler {role_number}'
+            header_role = f'VP{vp}: Player {role_number}'
         elif player in (1, 2):
-            header_role = f'Versuchsperson {vp}: Spieler {player}'
+            header_role = f'VP{vp}: Player {player}'
         else:
-            header_role = f'Versuchsperson {vp}'
+            header_role = f'VP{vp}'
 
         # Block-Logik
         block_idx = self.current_block_info['index'] if self.current_block_info else None
@@ -1360,35 +1451,40 @@ class TabletopRoot(FloatLayout):
             header = f'{header_round} | {header_role}'
             result_line = self._result_for_vp(vp)
 
-        column_width = 28
-
-        def pad_column(text: str) -> str:
-            padded = f"{text:<{column_width}}"
-            return padded.replace(' ', '\u00A0')
-
-        header_row = f"[b]{pad_column('Züge')}[/b][b]Ergebnis[/b]"
-        move_rows = [
-            f"{pad_column(signal_line)}{ergebnis_signal}",
-            f"{pad_column(urteil_line)}{ergebnis_urteil}",
+        moves_lines = [
+            '[b]Züge[/b]',
+            signal_line,
+            urteil_line,
         ]
 
-        lines = [
-            f"[b]{header}[/b]",
-            '',
-            header_row,
-            *move_rows,
+        result_lines = [
+            '[b]Ergebnis[/b]',
+            ergebnis_signal,
+            ergebnis_urteil,
         ]
+
+        outcome_lines = ['[b]Outcome[/b]']
         if outcome_statement:
-            lines.extend(['', outcome_statement])
-        lines.extend([ f"[b]{result_line}[/b]"])
+            outcome_lines.append(outcome_statement)
+        if result_line:
+            outcome_lines.append(f"[b]{result_line}[/b]")
 
-        # Mehrzeilig – leichte Abstände über \n
-        return "\n".join(lines)
+        return {
+            'header': f"[b]{header}[/b]",
+            'moves': "\n".join(filter(None, moves_lines)),
+            'result': "\n".join(filter(None, result_lines)),
+            'outcome': "\n".join(filter(None, outcome_lines)),
+        }
 
     def update_user_displays(self):
         """Setzt die Texte in den beiden Displays (unten=VP1, oben=VP2)."""
-        self.user_displays[1].text = self.format_user_display_text(1)  # unten
-        self.user_displays[2].text = self.format_user_display_text(2)  # oben (rotiert)
+        for vp in (1, 2):
+            content = self.format_user_display_content(vp)
+            widgets = self.user_display_widgets[vp]
+            widgets['header'].text = content.get('header', '')
+            widgets['moves'].text = content.get('moves', '')
+            widgets['result'].text = content.get('result', '')
+            widgets['outcome'].text = content.get('outcome', '')
 
     def update_pause_overlay(self):
         if not hasattr(self, 'pause_cover'):
