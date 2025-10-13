@@ -32,7 +32,7 @@ from datetime import datetime
 from kivy.uix.label import Label
 from kivy.graphics import Color, Rectangle, PushMatrix, PopMatrix, Rotate
 
-from game_engine_wl import EventLogger, Phase as EnginePhase
+from game_engine_w import EventLogger, Phase as EnginePhase
 
 # --- Display fest auf 3840x2160, Vollbild aktivierbar (kommentiere die nächste Zeile, falls du Fenster willst)
 Config.set('graphics', 'fullscreen', 'auto')
@@ -1331,6 +1331,13 @@ class TabletopRoot(FloatLayout):
             return
         active = (self.in_block_pause or self.session_finished) and bool(self.pause_message)
         if active:
+            if self.pause_cover.parent is None:
+                self.add_widget(self.pause_cover)
+                # Start-Buttons über das Overlay legen
+                self.remove_widget(self.btn_start_p1)
+                self.remove_widget(self.btn_start_p2)
+                self.add_widget(self.btn_start_p1)
+                self.add_widget(self.btn_start_p2)
             self.pause_cover.opacity = 1
             self.pause_cover.disabled = False
             self.pause_label.text = self.pause_message
@@ -1338,6 +1345,13 @@ class TabletopRoot(FloatLayout):
             self.pause_cover.opacity = 0
             self.pause_cover.disabled = True
             self.pause_label.text = ''
+            if self.pause_cover.parent is not None:
+                self.remove_widget(self.pause_cover)
+                # Reihenfolge der Buttons erhalten
+                self.remove_widget(self.btn_start_p1)
+                self.remove_widget(self.btn_start_p2)
+                self.add_widget(self.btn_start_p1)
+                self.add_widget(self.btn_start_p2)
 
 
 
