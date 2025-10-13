@@ -339,6 +339,30 @@ class TabletopRoot(FloatLayout):
         self.round_badge.opacity = 0
         self.add_widget(self.round_badge)
 
+        # Pause-Overlay (für Blockpausen)
+        self.pause_cover = FloatLayout(size_hint=(1, 1))
+        with self.pause_cover.canvas.before:
+            Color(0.75, 0.75, 0.75, 1)
+            self.pause_bg = Rectangle(pos=(0, 0), size=Window.size)
+        self.pause_label = Label(
+            text='',
+            color=(0, 0, 0, 1),
+            halign='center',
+            valign='middle',
+            size_hint=(1, 1),
+        )
+        self.pause_label.bind(texture_size=lambda *_: None)
+        self.pause_cover.add_widget(self.pause_label)
+        self.pause_cover.opacity = 0
+        self.pause_cover.disabled = True
+        self.add_widget(self.pause_cover)
+
+        # Start-Buttons nach vorn holen (über dem Overlay)
+        self.remove_widget(self.btn_start_p1)
+        self.remove_widget(self.btn_start_p2)
+        self.add_widget(self.btn_start_p1)
+        self.add_widget(self.btn_start_p2)
+
         # interne States
         self.p1_pressed = False
         self.p2_pressed = False
@@ -369,6 +393,8 @@ class TabletopRoot(FloatLayout):
         self.score_state_block = None
         self.score_state_round_start = None
         self.outcome_score_applied = False
+        self.pending_round_start_log = False
+        self.next_block_preview = None
 
         self.update_layout()
         self.update_user_displays()
@@ -505,6 +531,17 @@ class TabletopRoot(FloatLayout):
         self.round_badge.pos = (W / 2 - badge_width / 2, corner_margin / 2)
         self.round_badge.text_size = (badge_width, badge_height)
 
+        # Pause-Overlay
+        if hasattr(self, 'pause_bg'):
+            self.pause_bg.size = (W, H)
+            self.pause_bg.pos = (0, 0)
+        if hasattr(self, 'pause_cover'):
+            self.pause_cover.size = (W, H)
+            self.pause_cover.pos = (0, 0)
+        if hasattr(self, 'pause_label'):
+            self.pause_label.text_size = (W * 0.8, H * 0.6)
+            self.pause_label.font_size = 56 * scale if scale else 56
+
         # Refresh transforms after layout changes
         for buttons in self.signal_buttons.values():
             for btn in buttons.values():
@@ -519,8 +556,8 @@ class TabletopRoot(FloatLayout):
     def load_blocks(self):
         order = [
             (1, 'Paare1.csv', False),
-            (2, 'Paare3.csv', True),
-            (3, 'Paare2.csv', False),
+            (2, 'Paare2.csv', True),
+            (3, 'Paare3.csv', False),
             (4, 'Paare4.csv', True),
         ]
         blocks = []
@@ -795,15 +832,21 @@ class TabletopRoot(FloatLayout):
                 self.session_finished = True
                 self.in_block_pause = False
                 self.pause_message = 'Alle Blöcke abgeschlossen. Vielen Dank!'
+                self.next_block_preview = None
             else:
                 self.in_block_pause = True
                 next_block = self.blocks[self.current_block_idx]
                 condition = 'Stake' if next_block['payout'] else 'ohne Stake'
                 self.pause_message = (
-                    f'Block {completed_block["index"]} beendet.\n'
-                    'Pause.\n'
-                    f'Weiter mit Block {next_block["index"]} ({condition}).'
+                    'Dieser Block ist vorbei. Nehmen Sie sich einen Moment zum durchatmen.\n'
+                    'Wenn Sie bereit sind klicken Sie auf weiter.\n'
+                    f'Als nächstes folgt Block {next_block["index"]} ({condition}).'
                 )
+                self.next_block_preview = {
+                    'block': next_block,
+                    'round_index': 0,
+                    'round_in_block': 1,
+                }
         self.round = self.compute_global_round()
 
     # --- Logik
@@ -855,6 +898,7 @@ class TabletopRoot(FloatLayout):
         # Badge unten ist deaktiviert
         self.round_badge.text = ''
         self.update_user_displays()
+        self.update_pause_overlay()
 
     def start_pressed(self, who:int):
         if self.session_finished:
@@ -880,12 +924,14 @@ class TabletopRoot(FloatLayout):
                 if not self.session_finished:
                     start_phase = self.phase_for_player(self.first_player, 'inner') or PH_P1_INNER
                     self.phase = start_phase
+                    self.log_round_start_if_pending()
                     self.apply_phase()
             elif self.phase == PH_SHOWDOWN:
                 self.prepare_next_round(start_immediately=True)
             else:
                 start_phase = self.phase_for_player(self.first_player, 'inner') or PH_P1_INNER
                 self.phase = start_phase
+                self.log_round_start_if_pending()
                 self.apply_phase()
 
     def tap_card(self, who:int, which:str):
@@ -975,6 +1021,7 @@ class TabletopRoot(FloatLayout):
         if start_immediately and not self.in_block_pause and not self.session_finished:
             start_phase = self.phase_for_player(self.first_player, 'inner') or PH_P1_INNER
             self.phase = start_phase
+            self.log_round_start_if_pending()
         else:
             self.phase = PH_WAIT_BOTH_START
         self.apply_phase()
@@ -993,6 +1040,7 @@ class TabletopRoot(FloatLayout):
         if plan_info:
             block, plan = plan_info
             self.current_block_info = block
+            self.next_block_preview = None
             self.round_in_block = self.current_round_idx + 1
             self.current_round_has_stake = block['payout']
             if block['payout'] and self.score_state_block != block['index']:
@@ -1045,8 +1093,7 @@ class TabletopRoot(FloatLayout):
             'payout': self.current_round_has_stake,
         }
         self.refresh_center_cards(reveal=False)
-        if plan_info:
-            self.log_round_start()
+        self.pending_round_start_log = bool(plan_info)
         self.update_user_displays()
 
     def refresh_center_cards(self, reveal: bool):
@@ -1279,6 +1326,19 @@ class TabletopRoot(FloatLayout):
         self.user_displays[1].text = self.format_user_display_text(1)  # unten
         self.user_displays[2].text = self.format_user_display_text(2)  # oben (rotiert)
 
+    def update_pause_overlay(self):
+        if not hasattr(self, 'pause_cover'):
+            return
+        active = (self.in_block_pause or self.session_finished) and bool(self.pause_message)
+        if active:
+            self.pause_cover.opacity = 1
+            self.pause_cover.disabled = False
+            self.pause_label.text = self.pause_message
+        else:
+            self.pause_cover.opacity = 0
+            self.pause_cover.disabled = True
+            self.pause_label.text = ''
+
 
 
     def describe_level(self, level:str) -> str:
@@ -1429,25 +1489,24 @@ class TabletopRoot(FloatLayout):
     def write_round_log(self, actor: str, action: str, payload: dict, player: int):
         if not self.round_log_writer:
             return
-        if player not in (1, 2):
+        is_showdown = (action == 'showdown')
+        if not is_showdown and player not in (1, 2):
             return
-        if action == 'showdown':
-            return
+
         block_condition = ''
         block_number = ''
         round_in_block = ''
-        next_round_info = None
-        if action == 'next_round_click':
-            next_round_info = self.peek_next_round_info()
-        if next_round_info:
-            block = next_round_info['block']
-            block_condition = 'pay' if block.get('payout') else 'no_pay'
-            block_number = block.get('index', '')
-            round_in_block = next_round_info['round_in_block']
-        elif self.current_block_info:
+        if self.current_block_info:
             block_condition = 'pay' if self.current_round_has_stake else 'no_pay'
             block_number = self.current_block_info['index']
             round_in_block = self.round_in_block
+        elif self.next_block_preview:
+            block = self.next_block_preview.get('block')
+            if block:
+                block_condition = 'pay' if block.get('payout') else 'no_pay'
+                block_number = block.get('index', '')
+                round_in_block = self.next_block_preview.get('round_in_block', '')
+
         plan = None
         plan_info = self.get_current_plan()
         if plan_info:
@@ -1458,24 +1517,31 @@ class TabletopRoot(FloatLayout):
             vp1_cards = (None, None)
         if not vp2_cards:
             vp2_cards = (None, None)
+
         actor_vp = ''
-        if player in (1, 2):
+        if not is_showdown and player in (1, 2):
             vp_num = self.role_by_physical.get(player)
             if vp_num in (1, 2):
                 actor_vp = f'VP{vp_num}'
+
         spieler1_vp = ''
         first_player = self.first_player if self.first_player in (1, 2) else None
         if first_player is not None:
             vp_player1 = self.role_by_physical.get(first_player)
             if vp_player1 in (1, 2):
                 spieler1_vp = f'VP{vp_player1}'
+
         action_label = self.round_log_action_label(action, payload)
         timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+
         winner_label = ''
-        if action == 'next_round_click' and self.last_outcome and self.last_outcome.get('winner') in (1, 2):
-            winner_vp = self.role_by_physical.get(self.last_outcome.get('winner'))
-            if winner_vp in (1, 2):
-                winner_label = f'VP{winner_vp}'
+        if is_showdown:
+            winner_player = payload.get('winner')
+            if winner_player in (1, 2):
+                winner_vp = self.role_by_physical.get(winner_player)
+                if winner_vp in (1, 2):
+                    winner_label = f'VP{winner_vp}'
+
         if self.score_state:
             score_vp1 = self.score_state.get(1, '')
             score_vp2 = self.score_state.get(2, '')
@@ -1485,6 +1551,7 @@ class TabletopRoot(FloatLayout):
         else:
             score_vp1 = ''
             score_vp2 = ''
+
         def _card_value(val):
             return '' if val is None else val
 
@@ -1587,7 +1654,6 @@ class TabletopRoot(FloatLayout):
             self.session_popup.dismiss()
             self.session_popup = None
         self.log_event(None, 'session_start', {'session_number': number})
-        self.log_round_start()
         self.apply_phase()
 
     def log_round_start(self):
@@ -1603,6 +1669,11 @@ class TabletopRoot(FloatLayout):
             'vp_roles': self.role_by_physical.copy(),
             'player_roles': self.player_roles.copy(),
         })
+        self.pending_round_start_log = False
+
+    def log_round_start_if_pending(self):
+        if self.pending_round_start_log:
+            self.log_round_start()
 
     def record_action(self, player:int, text:str):
         self.status_lines[player].append(text)
