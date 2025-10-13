@@ -511,7 +511,7 @@ class TabletopRoot(FloatLayout):
         display_gap = 40 * scale
         span_width = 2 * center_card_width + center_gap_x   # über beide Karten spannen
         display_width = span_width
-        display_height = 260 * scale
+        display_height = 520 * scale
         padding_x = 60 * scale
         padding_y = 40 * scale
 
