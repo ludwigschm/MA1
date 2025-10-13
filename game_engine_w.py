@@ -246,7 +246,8 @@ class SessionCsvLogger:
             actor: str, action: str, payload: Dict[str, Any], timestamp_iso: str,
             round_index_override: Optional[int] = None,
             scores: Optional[Dict[VP, int]] = None):
-        if actor == "SYS":
+        is_reveal = (actor == "SYS" and action == "reveal_and_score")
+        if actor == "SYS" and not is_reveal:
             return
         if cfg.session_number is None:
             session_value = cfg.session_id
