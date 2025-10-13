@@ -511,7 +511,7 @@ class TabletopRoot(FloatLayout):
         display_gap = 40 * scale
         span_width = 2 * center_card_width + center_gap_x   # über beide Karten spannen
         display_width = span_width
-        display_height = 520 * scale
+        display_height = 660 * scale
         padding_x = 60 * scale
         padding_y = 40 * scale
 
@@ -1359,20 +1359,27 @@ class TabletopRoot(FloatLayout):
             header = f'{header_round} | {header_role}'
             result_line = self._result_for_vp(vp)
 
+        column_width = 28
+
+        def pad_column(text: str) -> str:
+            padded = f"{text:<{column_width}}"
+            return padded.replace(' ', '\u00A0')
+
+        header_row = f"[b]{pad_column('Züge')}[/b][b]Ergebnis[/b]"
+        move_rows = [
+            f"{pad_column(signal_line)}{ergebnis_signal}",
+            f"{pad_column(urteil_line)}{ergebnis_urteil}",
+        ]
+
         lines = [
             f"[b]{header}[/b]",
             '',
-            '[b]Züge[/b]',
-            signal_line,
-            urteil_line,
-            '',
-            '[b]Ergebnis[/b]',
-            ergebnis_signal,
-            ergebnis_urteil,
+            header_row,
+            *move_rows,
         ]
         if outcome_statement:
             lines.extend(['', outcome_statement])
-        lines.extend(['', f"[b]{result_line}[/b]"])
+        lines.extend(['', f"[b]Outcome: {result_line}[/b]"])
 
         # Mehrzeilig – leichte Abstände über \n
         return "\n".join(lines)
